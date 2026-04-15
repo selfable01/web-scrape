@@ -4,31 +4,12 @@ scraper.py
 Daily price scraper for HUEI YEH (輝葉) products in the
 "按摩用品" (Massage Supplies) category on momoshop.com.tw.
 
-Strategy
-========
-momoshop's search results are rendered by a Next.js front-end. The fully
-hydrated product data (goodsCode / goodsName / goodsPrice / marketPrice /
-maxPage …) is embedded inside `self.__next_f.push([...])` chunks in the
-delivered HTML. Parsing this JSON payload is **far more robust than CSS
-selector scraping**:
+Designed to run inside GitHub Actions. Stores results in a Vercel Postgres
+database via the POSTGRES_URL environment variable.
 
-  * It survives layout / Tailwind / class-name changes.
-  * It contains the canonical product ID momo uses internally.
-  * It exposes `maxPage`, removing any guessing about pagination.
-
-We still drive the request through Playwright (headless Chromium) because
-momo gates raw `requests` traffic with anti-bot checks; a real browser
-fingerprint with cookies + JS handshake is the safest path.
-
-Product Identity
-================
-Products are identified by (product_name + market_price) rather than
-momo's goodsCode. Items that share the same name and original price are
-treated as the same product and their price history is merged.
-
-Usage
------
-    python scraper.py                 # run today's scrape (skip if done)
+Usage (local):
+    export POSTGRES_URL="postgres://..."
+    python scraper.py
     python scraper.py --force         # re-scrape even if today exists
     python scraper.py --headed        # show the browser (debugging)
 """
@@ -37,16 +18,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import os
 import re
 import sys
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from typing import Iterator
 from urllib.parse import urlencode
 
+import psycopg2
+import psycopg2.extras
 from playwright.async_api import Browser, async_playwright
-
-import db_manager
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -55,7 +38,6 @@ SEARCH_KEYWORD = "輝葉"           # HUEI YEH brand
 CATE_CODE      = "3100000000"     # 按摩用品 (Massage Supplies)
 BASE_URL       = "https://www.momoshop.com.tw/search/searchShop.jsp"
 
-# Rotate among realistic desktop user-agents
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -65,8 +47,116 @@ USER_AGENTS = [
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
 ]
 
-# Hard ceiling so a momo bug can never push us into infinite pagination
 MAX_PAGES_HARD_LIMIT = 50
+
+# Timezone for Taiwan
+TW_TZ = timezone(timedelta(hours=8))
+
+
+# ---------------------------------------------------------------------------
+# Database helpers
+# ---------------------------------------------------------------------------
+def get_db_url() -> str:
+    url = os.environ.get("POSTGRES_URL", "")
+    if not url:
+        print("[db] ERROR: POSTGRES_URL environment variable is not set.")
+        sys.exit(1)
+    # Vercel Postgres sometimes uses postgres:// which psycopg2 needs as postgresql://
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return url
+
+
+def get_conn():
+    return psycopg2.connect(get_db_url())
+
+
+def init_db():
+    """Create the momo_prices table if it doesn't exist."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS momo_prices (
+                    id              SERIAL PRIMARY KEY,
+                    product_name    TEXT        NOT NULL,
+                    original_price  INTEGER,
+                    discount_price  INTEGER     NOT NULL,
+                    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    unique_key      TEXT        NOT NULL
+                );
+            """)
+            # Unique index: one record per product per timestamp
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uix_momo_prices_key_day
+                    ON momo_prices (unique_key, timestamp);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_momo_prices_key
+                    ON momo_prices (unique_key);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_momo_prices_ts
+                    ON momo_prices (timestamp);
+            """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def make_unique_key(product_name: str, original_price: int | None) -> str:
+    """Derive a stable unique key from (name + original_price)."""
+    key = f"{product_name.strip()}|{original_price or 0}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def already_ran_today() -> bool:
+    """Return True if at least one row exists for today (Asia/Taipei)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1 FROM momo_prices
+                 WHERE (timestamp AT TIME ZONE 'Asia/Taipei')::date = (NOW() AT TIME ZONE 'Asia/Taipei')::date
+                 LIMIT 1
+            """)
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def insert_prices(records: list[dict]) -> int:
+    """Insert today's scraped records. Returns number of rows inserted."""
+    now = datetime.now(TW_TZ)
+    conn = get_conn()
+    inserted = 0
+    try:
+        with conn.cursor() as cur:
+            for r in records:
+                try:
+                    cur.execute("""
+                        INSERT INTO momo_prices
+                            (product_name, original_price, discount_price, timestamp, unique_key)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (unique_key, timestamp) DO NOTHING
+                    """, (
+                        r["product_name"],
+                        r["original_price"],
+                        r["discount_price"],
+                        now,
+                        r["unique_key"],
+                    ))
+                    if cur.rowcount > 0:
+                        inserted += 1
+                except psycopg2.Error as e:
+                    print(f"[db] Insert error for {r['product_name'][:30]}: {e}")
+                    conn.rollback()
+                    continue
+        conn.commit()
+    finally:
+        conn.close()
+    return inserted
+
 
 # ---------------------------------------------------------------------------
 # URL builder
@@ -86,6 +176,7 @@ def build_search_url(page_num: int = 1) -> str:
 # Next.js payload extraction
 # ---------------------------------------------------------------------------
 _PUSH_RE = re.compile(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', re.DOTALL)
+
 
 def _extract_next_payload(html: str) -> str:
     """Concatenate and unescape every __next_f.push() chunk in the HTML."""
@@ -132,6 +223,7 @@ def _iter_goods_objects(payload: str) -> Iterator[dict]:
 
 _PRICE_NUM_RE = re.compile(r"[\d,]+")
 
+
 def _to_int_price(price_str: str | None) -> int | None:
     """'$$5,680' -> 5680. Returns None if nothing parseable."""
     if not price_str:
@@ -150,13 +242,11 @@ def parse_page(html: str) -> tuple[list[dict], int]:
     Parse one search results page.
 
     Returns (records, max_page) where:
-        records  – list of {canonical_id, product_id, product_name, price,
-                            market_price, url}
+        records  – list of {unique_key, product_name, original_price, discount_price}
         max_page – total number of pages momo says exist for this query
     """
     payload = _extract_next_payload(html)
 
-    # maxPage lives on the search result root object
     max_page = 1
     m = re.search(r'"maxPage":(\d+)', payload)
     if m:
@@ -169,30 +259,28 @@ def parse_page(html: str) -> tuple[list[dict], int]:
             continue
         seen_codes.add(pid)
 
-        # Sale price: prefer the structured model, fall back to flat field
+        # Sale price (discount_price)
         price = None
         gpm = goods.get("goodsPriceModel") or {}
         bp  = gpm.get("basePrice") or {}
         price = _to_int_price(bp.get("price")) or _to_int_price(goods.get("goodsPrice"))
 
-        # Market (list) price: optional context for "is this a discount?"
+        # Market / list price (original_price — the strikethrough)
         mpm = goods.get("marketPriceModel") or {}
         mbp = mpm.get("basePrice") or {}
         market = _to_int_price(mbp.get("price")) or _to_int_price(goods.get("goodsPriceOri"))
 
         name = (goods.get("goodsName") or "").strip()
         if not name or price is None:
-            continue  # skip malformed entries
+            continue
 
-        canonical_id = db_manager.make_canonical_id(name, market)
+        unique_key = make_unique_key(name, market)
 
         records.append({
-            "canonical_id": canonical_id,
-            "product_id":   pid,
-            "product_name": name,
-            "price":        price,
-            "market_price": market,
-            "url":          f"https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code={pid}",
+            "unique_key":      unique_key,
+            "product_name":    name,
+            "original_price":  market,
+            "discount_price":  price,
         })
 
     return records, max_page
@@ -202,11 +290,7 @@ def parse_page(html: str) -> tuple[list[dict], int]:
 # Scrape orchestration
 # ---------------------------------------------------------------------------
 async def fetch_html(browser: Browser, url: str, ua: str) -> str:
-    """Open a fresh context (clean cookies), load the URL, return HTML.
-
-    Scrolls to the bottom of the page and waits 2 seconds so that all
-    lazy-loaded prices and images are fully rendered before extraction.
-    """
+    """Open a fresh context, load the URL, scroll to bottom, return HTML."""
     ctx = await browser.new_context(
         user_agent=ua,
         locale="zh-TW",
@@ -216,10 +300,9 @@ async def fetch_html(browser: Browser, url: str, ua: str) -> str:
     page = await ctx.new_page()
     try:
         await page.goto(url, wait_until="networkidle", timeout=60_000)
-        # Give Next.js time to stream the rest of the chunks
         await page.wait_for_timeout(4_000)
 
-        # Scroll to bottom to trigger lazy-loaded content (prices/images)
+        # Scroll to bottom to trigger lazy-loaded content
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await page.wait_for_timeout(3_000)
 
@@ -228,28 +311,9 @@ async def fetch_html(browser: Browser, url: str, ua: str) -> str:
         await ctx.close()
 
 
-async def _wait_for_network() -> None:
-    """Wait up to 60 seconds for network connectivity after wake-from-sleep."""
-    import socket
-    for attempt in range(12):
-        try:
-            socket.create_connection(("www.momoshop.com.tw", 443), timeout=5)
-            print("[scrape] Network is ready.")
-            return
-        except OSError:
-            wait = 5
-            print(f"[scrape] Network not ready, retrying in {wait}s "
-                  f"(attempt {attempt + 1}/12)...")
-            await asyncio.sleep(wait)
-    print("[scrape] WARNING: Network may not be ready, proceeding anyway.")
-
-
-async def scrape(headed: bool = False) -> list[dict]:
+async def scrape(headed: bool = False) -> tuple[list[dict], int]:
     """Walk every page of the search result and return all product records."""
-    # Wait for network (important after wake-from-sleep)
-    await _wait_for_network()
-
-    all_records: dict[str, dict] = {}  # dedupe by canonical_id across pages
+    all_records: dict[str, dict] = {}  # dedupe by unique_key across pages
     total_scraped = 0
     max_retries = 2
 
@@ -266,7 +330,6 @@ async def scrape(headed: bool = False) -> list[dict]:
                 url = build_search_url(page_num)
                 print(f"[scrape] page {page_num} → {url}")
 
-                # Retry logic for pages that return 0 products
                 records = []
                 for attempt in range(max_retries + 1):
                     html = await fetch_html(browser, url, ua)
@@ -282,9 +345,8 @@ async def scrape(headed: bool = False) -> list[dict]:
                 print(f"[scrape]   parsed {len(records)} products "
                       f"(maxPage={max_page})")
                 for r in records:
-                    all_records.setdefault(r["canonical_id"], r)
+                    all_records.setdefault(r["unique_key"], r)
                 page_num += 1
-                # Polite delay between page fetches
                 await asyncio.sleep(2)
         finally:
             await browser.close()
@@ -302,12 +364,10 @@ def main() -> int:
                     help="show the browser window (debugging)")
     args = ap.parse_args()
 
-    db_manager.init_db()
+    init_db()
 
-    today = date.today().isoformat()
-    if db_manager.already_ran_today(today) and not args.force:
-        print(f"[scraper] today ({today}) already scraped — skipping. "
-              "Use --force to override.")
+    if already_ran_today() and not args.force:
+        print("[scraper] today already scraped — skipping. Use --force to override.")
         return 0
 
     unique_records, total_scraped = asyncio.run(scrape(headed=args.headed))
@@ -316,13 +376,13 @@ def main() -> int:
         return 1
 
     # Verification line
-    print(f"Scraped: {total_scraped} items | "
-          f"Unique Products (Name+Price matching): {len(unique_records)} | "
-          f"Expected: 79")
+    print(f"Total Scraped: {total_scraped} | "
+          f"Unique Matches: {len(unique_records)} | "
+          f"Target: 79")
 
-    inserted = db_manager.insert_prices(unique_records, run_date=today)
+    inserted = insert_prices(unique_records)
     print(f"[scraper] {len(unique_records)} unique products, "
-          f"{inserted} new rows written for {today}.")
+          f"{inserted} new rows written.")
     return 0
 
 

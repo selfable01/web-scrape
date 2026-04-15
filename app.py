@@ -1,160 +1,130 @@
 """
 app.py — Flask dashboard for the momo HUEI YEH price tracker.
 
+Deployed on Vercel as a serverless function. Reads from Vercel Postgres
+via the POSTGRES_URL environment variable.
+
 Routes
 ------
-GET  /                            Dashboard: products + latest prices + sparkline
-GET  /product/<canonical_id>      Detail page with full price history chart
-GET  /full-list                   Every record ever saved since Day 1
-GET  /api/products                JSON list of all tracked products
-GET  /api/history/<canonical_id>  JSON price history for one product
-POST /api/scrape                  Trigger a scrape (background thread)
-GET  /api/scrape/status           Current scrape job status
-
-Run:
-    python app.py
-Then open http://127.0.0.1:5000
+GET  /           Dashboard: top products + 7-day price trend chart
+GET  /full-list  Every record ever saved since Day 1 (sortable table)
+GET  /product/<unique_key>  Detail page with full price history chart
 """
 
 from __future__ import annotations
 
-import asyncio
-import threading
-from datetime import date, datetime, timedelta
-from pathlib import Path
+import os
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, render_template, request
+from flask_sqlalchemy import SQLAlchemy
 
-import db_manager
-import scraper
-
+# ---------------------------------------------------------------------------
+# App + DB setup
+# ---------------------------------------------------------------------------
 app = Flask(__name__)
-app.json.ensure_ascii = False   # emit real CJK chars, not \uXXXX escapes
-db_manager.init_db()
+app.json.ensure_ascii = False  # emit real CJK chars, not \uXXXX escapes
+
+db_url = os.environ.get("POSTGRES_URL", "")
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
+
+TW_TZ = timezone(timedelta(hours=8))
+
 
 # ---------------------------------------------------------------------------
-# Background scrape job state (single-job, in-memory)
+# Model
 # ---------------------------------------------------------------------------
-_job = {
-    "running":  False,
-    "started":  None,
-    "finished": None,
-    "message":  "idle",
-    "inserted": 0,
-    "found":    0,
-    "error":    None,
-}
-_job_lock = threading.Lock()
+class MomoPrice(db.Model):
+    __tablename__ = "momo_prices"
 
-
-def _run_scrape_job(force: bool) -> None:
-    """Worker run inside a background thread."""
-    global _job
-    try:
-        today = date.today().isoformat()
-        if db_manager.already_ran_today(today) and not force:
-            with _job_lock:
-                _job.update(
-                    running=False,
-                    finished=datetime.now().isoformat(timespec="seconds"),
-                    message=f"Skipped — {today} already in DB. Use force to override.",
-                )
-            return
-
-        with _job_lock:
-            _job["message"] = "Launching headless Chromium…"
-
-        # Each thread needs its own asyncio event loop
-        unique_records, total_scraped = asyncio.run(scraper.scrape(headed=False))
-
-        if not unique_records:
-            with _job_lock:
-                _job.update(
-                    running=False,
-                    finished=datetime.now().isoformat(timespec="seconds"),
-                    message="No products parsed — nothing written.",
-                    error="empty result",
-                )
-            return
-
-        inserted = db_manager.insert_prices(unique_records, run_date=today)
-        with _job_lock:
-            _job.update(
-                running=False,
-                finished=datetime.now().isoformat(timespec="seconds"),
-                found=len(unique_records),
-                inserted=inserted,
-                message=f"Done — {total_scraped} scraped, "
-                        f"{len(unique_records)} unique, "
-                        f"{inserted} new rows for {today}.",
-            )
-    except Exception as exc:  # noqa: BLE001
-        with _job_lock:
-            _job.update(
-                running=False,
-                finished=datetime.now().isoformat(timespec="seconds"),
-                error=str(exc),
-                message=f"Failed: {exc}",
-            )
+    id = db.Column(db.Integer, primary_key=True)
+    product_name = db.Column(db.Text, nullable=False)
+    original_price = db.Column(db.Integer)
+    discount_price = db.Column(db.Integer, nullable=False)
+    timestamp = db.Column(db.DateTime(timezone=True), nullable=False,
+                          default=lambda: datetime.now(TW_TZ))
+    unique_key = db.Column(db.Text, nullable=False)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _tw_now():
+    return datetime.now(TW_TZ)
+
+
 def _latest_for_each_product(days: int = 30) -> list[dict]:
-    """
-    Return one row per product with their latest price plus the price from
-    `days` ago (or the earliest known) so we can show movement.
-    """
-    cutoff = (date.today() - timedelta(days=days - 1)).isoformat()
-    with db_manager.get_conn() as conn:
-        rows = conn.execute(
-            """
-            WITH latest AS (
-                SELECT canonical_id, MAX(date) AS last_date
-                  FROM prices
-              GROUP BY canonical_id
-            ),
-            earliest AS (
-                SELECT canonical_id, MIN(date) AS first_date
-                  FROM prices
-                 WHERE date >= ?
-              GROUP BY canonical_id
-            )
-            SELECT  p.canonical_id,
-                    p.product_id,
-                    p.product_name,
-                    p.price        AS latest_price,
-                    p.market_price AS market_price,
-                    p.url          AS url,
-                    p.date         AS latest_date,
-                    p0.price       AS first_price,
-                    p0.date        AS first_date
-              FROM latest l
-              JOIN prices p
-                ON p.canonical_id = l.canonical_id AND p.date = l.last_date
-              LEFT JOIN earliest e
-                ON e.canonical_id = p.canonical_id
-              LEFT JOIN prices p0
-                ON p0.canonical_id = e.canonical_id AND p0.date = e.first_date
-          ORDER BY p.product_name
-            """,
-            (cutoff,),
-        ).fetchall()
-    rows = [dict(r) for r in rows]
+    """One row per product: latest price + price from `days` ago for delta."""
+    cutoff = _tw_now() - timedelta(days=days)
+
+    rows = (
+        MomoPrice.query
+        .filter(MomoPrice.timestamp >= cutoff)
+        .order_by(MomoPrice.timestamp.asc())
+        .all()
+    )
+
+    # Group by unique_key
+    products: dict[str, list] = {}
     for r in rows:
-        if r.get("first_price") and r.get("latest_price"):
-            r["delta"] = r["latest_price"] - r["first_price"]
-            r["delta_pct"] = (r["delta"] / r["first_price"] * 100) if r["first_price"] else 0
-        else:
-            r["delta"], r["delta_pct"] = 0, 0
-    return rows
+        products.setdefault(r.unique_key, []).append(r)
+
+    result = []
+    for uk, recs in products.items():
+        latest = recs[-1]
+        first = recs[0]
+        delta = latest.discount_price - first.discount_price
+        delta_pct = (delta / first.discount_price * 100) if first.discount_price else 0
+
+        result.append({
+            "unique_key": uk,
+            "product_name": latest.product_name,
+            "discount_price": latest.discount_price,
+            "original_price": latest.original_price,
+            "latest_date": latest.timestamp.strftime("%Y-%m-%d"),
+            "delta": delta,
+            "delta_pct": delta_pct,
+        })
+
+    result.sort(key=lambda x: x["product_name"])
+    return result
 
 
-def _history_series(canonical_id: str, days: int) -> list[dict]:
-    rows = db_manager.get_price_history(canonical_id, days=days)
-    return [{"date": r["date"], "price": r["price"],
-             "market_price": r["market_price"]} for r in rows]
+def _history_series(unique_key: str, days: int) -> list[dict]:
+    """Price history for one product over `days` days."""
+    cutoff = _tw_now() - timedelta(days=days)
+    rows = (
+        MomoPrice.query
+        .filter(MomoPrice.unique_key == unique_key,
+                MomoPrice.timestamp >= cutoff)
+        .order_by(MomoPrice.timestamp.asc())
+        .all()
+    )
+    return [
+        {
+            "date": r.timestamp.strftime("%Y-%m-%d"),
+            "price": r.discount_price,
+            "original_price": r.original_price,
+        }
+        for r in rows
+    ]
+
+
+def _has_today_data() -> bool:
+    """Check if there's data for today (Asia/Taipei)."""
+    today = _tw_now().date()
+    row = (
+        MomoPrice.query
+        .filter(db.func.date(MomoPrice.timestamp) >= str(today))
+        .first()
+    )
+    return row is not None
 
 
 # ---------------------------------------------------------------------------
@@ -163,11 +133,10 @@ def _history_series(canonical_id: str, days: int) -> list[dict]:
 @app.route("/")
 def index():
     products = _latest_for_each_product(days=30)
-    # Attach 7-day sparkline data
     for p in products:
-        p["spark"] = _history_series(p["canonical_id"], days=7)
-    today = date.today().isoformat()
-    has_today = db_manager.already_ran_today(today)
+        p["spark"] = _history_series(p["unique_key"], days=7)
+    today = _tw_now().strftime("%Y-%m-%d")
+    has_today = _has_today_data()
     return render_template("index.html",
                            products=products,
                            today=today,
@@ -176,38 +145,41 @@ def index():
 
 @app.route("/full-list")
 def full_list():
-    """Display every single record ever saved in the database."""
-    with db_manager.get_conn() as conn:
-        rows = conn.execute(
-            """SELECT date, canonical_id, product_id, product_name, price,
-                      market_price, url
-                 FROM prices
-             ORDER BY date DESC, product_name ASC"""
-        ).fetchall()
-    records = [dict(r) for r in rows]
+    """Every single record ever saved in the database."""
+    rows = (
+        MomoPrice.query
+        .order_by(MomoPrice.timestamp.desc(), MomoPrice.product_name.asc())
+        .all()
+    )
+    records = [
+        {
+            "date": r.timestamp.strftime("%Y-%m-%d"),
+            "unique_key": r.unique_key,
+            "product_name": r.product_name,
+            "discount_price": r.discount_price,
+            "original_price": r.original_price,
+        }
+        for r in rows
+    ]
     return render_template("full_list.html", records=records)
 
 
-@app.route("/product/<canonical_id>")
-def product_detail(canonical_id: str):
+@app.route("/product/<unique_key>")
+def product_detail(unique_key: str):
     days = int(request.args.get("days", 30))
-    history = _history_series(canonical_id, days=days)
+    history = _history_series(unique_key, days=days)
     if not history:
-        return f"No history for canonical_id={canonical_id}", 404
-    with db_manager.get_conn() as conn:
-        latest = conn.execute(
-            """SELECT product_name, product_id, url, market_price
-                 FROM prices
-                WHERE canonical_id = ?
-                ORDER BY date DESC LIMIT 1""",
-            (canonical_id,),
-        ).fetchone()
+        return f"No history for unique_key={unique_key}", 404
+    latest = (
+        MomoPrice.query
+        .filter(MomoPrice.unique_key == unique_key)
+        .order_by(MomoPrice.timestamp.desc())
+        .first()
+    )
     return render_template("product.html",
-                           product_id=latest["product_id"],
-                           canonical_id=canonical_id,
-                           product_name=latest["product_name"],
-                           market_price=latest["market_price"],
-                           url=latest["url"],
+                           unique_key=unique_key,
+                           product_name=latest.product_name,
+                           original_price=latest.original_price,
                            history=history,
                            days=days)
 
@@ -220,33 +192,10 @@ def api_products():
     return jsonify(_latest_for_each_product(days=30))
 
 
-@app.get("/api/history/<canonical_id>")
-def api_history(canonical_id: str):
+@app.get("/api/history/<unique_key>")
+def api_history(unique_key: str):
     days = int(request.args.get("days", 30))
-    return jsonify(_history_series(canonical_id, days=days))
-
-
-@app.post("/api/scrape")
-def api_scrape():
-    force = bool(request.json and request.json.get("force"))
-    with _job_lock:
-        if _job["running"]:
-            return jsonify({"ok": False, "message": "A scrape is already running."}), 409
-        _job.update(
-            running=True,
-            started=datetime.now().isoformat(timespec="seconds"),
-            finished=None,
-            message="Starting…",
-            inserted=0, found=0, error=None,
-        )
-    threading.Thread(target=_run_scrape_job, args=(force,), daemon=True).start()
-    return jsonify({"ok": True, "message": "Scrape started."})
-
-
-@app.get("/api/scrape/status")
-def api_scrape_status():
-    with _job_lock:
-        return jsonify(dict(_job))
+    return jsonify(_history_series(unique_key, days=days))
 
 
 if __name__ == "__main__":

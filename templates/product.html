@@ -19,7 +19,6 @@
   main { padding:24px 32px; max-width:1100px; margin:0 auto }
   h1 { font-size:18px; margin:0 0 6px; line-height:1.4 }
   .meta { color:var(--muted); font-size:13px; margin-bottom:18px }
-  .meta a { color:var(--accent); text-decoration:none }
   .stats { display:flex; gap:24px; flex-wrap:wrap; margin-bottom:20px }
   .stat { background:var(--panel); border:1px solid var(--line);
     border-radius:10px; padding:12px 16px; min-width:140px }
@@ -42,14 +41,13 @@
 </head>
 <body>
 <header>
-  <a href="/">← Back to dashboard</a>
+  <a href="/">Back to dashboard</a>
 </header>
 
 <main>
   <h1>{{ product_name }}</h1>
   <div class="meta">
-    Product ID <code>{{ product_id }}</code> · Canonical <code>{{ canonical_id[:8] }}</code>
-    {% if url %} · <a href="{{ url }}" target="_blank" rel="noopener">View on momo ↗</a>{% endif %}
+    Key <code>{{ unique_key[:8] }}</code>
   </div>
 
   <div class="stats">
@@ -57,9 +55,9 @@
     <div class="stat"><div class="label">Lowest ({{ days }}d)</div><div class="val" id="s-low">—</div></div>
     <div class="stat"><div class="label">Highest ({{ days }}d)</div><div class="val" id="s-high">—</div></div>
     <div class="stat"><div class="label">Change ({{ days }}d)</div><div class="val" id="s-change">—</div></div>
-    {% if market_price %}
+    {% if original_price %}
     <div class="stat"><div class="label">List price</div>
-      <div class="val">NT${{ "{:,}".format(market_price) }}</div></div>
+      <div class="val">NT${{ "{:,}".format(original_price) }}</div></div>
     {% endif %}
   </div>
 
@@ -74,7 +72,7 @@
 
   <div class="chart-wrap">
     <table>
-      <thead><tr><th>Date</th><th class="num">Price</th><th class="num">Δ vs prev</th></tr></thead>
+      <thead><tr><th>Date</th><th class="num">Price</th><th class="num">vs prev</th></tr></thead>
       <tbody id="tbl"></tbody>
     </table>
   </div>
@@ -83,7 +81,6 @@
 <script>
 const history = {{ history|tojson }};
 
-// --- Stats --------------------------------------------------------------
 const prices = history.map(h => h.price);
 const lo = Math.min(...prices), hi = Math.max(...prices);
 const latest = prices.at(-1), first = prices[0];
@@ -98,7 +95,6 @@ cEl.textContent = (delta > 0 ? '+' : '') + fmt(delta).replace('NT$','NT$') +
                   ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)`;
 cEl.style.color = delta < 0 ? 'var(--down)' : (delta > 0 ? 'var(--up)' : 'inherit');
 
-// --- Chart --------------------------------------------------------------
 (function drawChart() {
   const svg = document.getElementById('chart');
   const W = 900, H = 360, padL = 70, padR = 20, padT = 20, padB = 40;
@@ -108,7 +104,6 @@ cEl.style.color = delta < 0 ? 'var(--down)' : (delta > 0 ? 'var(--up)' : 'inheri
   const xs = i => padL + innerW * (i / Math.max(1, history.length - 1));
   const ys = v => padT + innerH * (1 - (v - yMin) / (yMax - yMin));
 
-  // Y gridlines (5 ticks)
   let g = '';
   for (let k = 0; k <= 4; k++) {
     const v = yMin + (yMax - yMin) * (k / 4);
@@ -119,14 +114,12 @@ cEl.style.color = delta < 0 ? 'var(--down)' : (delta > 0 ? 'var(--up)' : 'inheri
                 fill="#8a93a6" font-size="11">${Math.round(v).toLocaleString()}</text>`;
   }
 
-  // X labels (every Nth)
   const step = Math.max(1, Math.ceil(history.length / 8));
   for (let i = 0; i < history.length; i += step) {
     g += `<text x="${xs(i)}" y="${H-padB+18}" text-anchor="middle"
                 fill="#8a93a6" font-size="11">${history[i].date.slice(5)}</text>`;
   }
 
-  // Area + line
   const color = delta < 0 ? '#22c55e' : (delta > 0 ? '#ff5a5f' : '#94a3b8');
   const linePath = history.map((h,i) =>
     (i?'L':'M') + xs(i).toFixed(1) + ',' + ys(h.price).toFixed(1)).join(' ');
@@ -134,7 +127,6 @@ cEl.style.color = delta < 0 ? 'var(--down)' : (delta > 0 ? 'var(--up)' : 'inheri
   g += `<path d="${areaPath}" fill="${color}" fill-opacity="0.10" />`;
   g += `<path d="${linePath}" fill="none" stroke="${color}" stroke-width="2" />`;
 
-  // Points
   history.forEach((h,i) => {
     g += `<circle cx="${xs(i)}" cy="${ys(h.price)}" r="3.5"
                   fill="#0f1115" stroke="${color}" stroke-width="2">
@@ -142,19 +134,16 @@ cEl.style.color = delta < 0 ? 'var(--down)' : (delta > 0 ? 'var(--up)' : 'inheri
           </circle>`;
   });
 
-  // Latest annotation
   g += `<text x="${xs(history.length-1)+8}" y="${ys(latest)+4}"
               fill="${color}" font-size="12" font-weight="700">${fmt(latest)}</text>`;
 
   svg.innerHTML = g;
 })();
 
-// --- Table --------------------------------------------------------------
 const tbl = document.getElementById('tbl');
 history.slice().reverse().forEach((h, idx, arr) => {
   const prev = arr[idx + 1];
   const d = prev ? h.price - prev.price : 0;
-  const cls = d < 0 ? 'down' : (d > 0 ? 'up' : '');
   const col = d < 0 ? 'var(--down)' : (d > 0 ? 'var(--up)' : 'var(--muted)');
   const sign = d > 0 ? '+' : '';
   tbl.insertAdjacentHTML('beforeend',

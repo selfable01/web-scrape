@@ -35,7 +35,7 @@
 </head>
 <body>
 <header>
-  <a href="/">← Dashboard</a>
+  <a href="/">Dashboard</a>
   <h1>Full Price History</h1>
 </header>
 
@@ -48,10 +48,8 @@
         <tr>
           <th data-col="date">Date <span class="arrow">▼</span></th>
           <th data-col="product_name">Product Name <span class="arrow"></span></th>
-          <th data-col="product_id">ID <span class="arrow"></span></th>
-          <th data-col="price">Price <span class="arrow"></span></th>
-          <th data-col="market_price">Market Price <span class="arrow"></span></th>
-          <th>Link</th>
+          <th data-col="discount_price">Discount Price <span class="arrow"></span></th>
+          <th data-col="original_price">Original Price <span class="arrow"></span></th>
         </tr>
       </thead>
       <tbody id="tbl"></tbody>
@@ -65,7 +63,7 @@ const tbody = document.getElementById('tbl');
 const fmt = n => n != null ? 'NT$' + n.toLocaleString() : '—';
 
 let sortCol = 'date';
-let sortAsc = false; // default: newest first
+let sortAsc = false;
 
 function render() {
   const sorted = [...records].sort((a, b) => {
@@ -81,11 +79,9 @@ function render() {
 
   tbody.innerHTML = sorted.map(r => `<tr>
     <td>${r.date}</td>
-    <td><a href="/product/${r.canonical_id}">${r.product_name}</a></td>
-    <td class="num">${r.product_id}</td>
-    <td class="num">${fmt(r.price)}</td>
-    <td class="num">${fmt(r.market_price)}</td>
-    <td>${r.url ? '<a href="' + r.url + '" target="_blank" rel="noopener">momo ↗</a>' : '—'}</td>
+    <td><a href="/product/${r.unique_key}">${r.product_name}</a></td>
+    <td class="num">${fmt(r.discount_price)}</td>
+    <td class="num">${fmt(r.original_price)}</td>
   </tr>`).join('');
 }
 
@@ -96,9 +92,8 @@ document.querySelectorAll('#history-table th[data-col]').forEach(th => {
       sortAsc = !sortAsc;
     } else {
       sortCol = col;
-      sortAsc = (col === 'product_name'); // name defaults A→Z, others desc
+      sortAsc = (col === 'product_name');
     }
-    // Update arrows
     document.querySelectorAll('#history-table th .arrow').forEach(a => a.textContent = '');
     th.querySelector('.arrow').textContent = sortAsc ? '▲' : '▼';
     render();

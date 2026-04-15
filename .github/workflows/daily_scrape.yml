@@ -1,0 +1,32 @@
+name: Daily Momo Scrape
+
+on:
+  schedule:
+    # 03:00 UTC = 11:00 AM Asia/Taipei
+    - cron: "0 3 * * *"
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install playwright playwright-stealth psycopg2-binary
+
+      - name: Install Playwright browsers
+        run: playwright install --with-deps chromium
+
+      - name: Run scraper
+        run: python scraper.py

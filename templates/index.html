@@ -19,12 +19,6 @@
   header h1 { font-size:18px; margin:0; font-weight:600 }
   header .meta { color:var(--muted); font-size:13px; }
   header .spacer { flex:1 }
-  button {
-    background:var(--accent); color:white; border:0; padding:9px 16px;
-    border-radius:8px; font-weight:600; cursor:pointer; font-size:13px;
-  }
-  button:disabled { opacity:.5; cursor:not-allowed }
-  button.secondary { background:var(--panel); border:1px solid var(--line); color:var(--text) }
   #status { color:var(--muted); font-size:12px; min-width:240px }
   main { padding: 24px 32px }
   .grid {
@@ -56,31 +50,29 @@
 <header>
   <h1>輝葉 (HUEI YEH) · 按摩用品 Price Tracker</h1>
   <span class="meta">Today: {{ today }} ·
-    {% if has_today %}<span style="color:var(--down)">✓ scraped</span>
+    {% if has_today %}<span style="color:var(--down)">scraped</span>
     {% else %}<span style="color:var(--up)">not yet scraped</span>{% endif %}</span>
   <span class="spacer"></span>
   <span id="status">{{ products|length }} products tracked</span>
-  <a href="/full-list" style="color:var(--accent);font-size:13px;text-decoration:none;font-weight:600">Full History →</a>
-  <button id="scrape">Run scrape now</button>
-  <button id="scrape-force" class="secondary">Force re-scrape</button>
+  <a href="/full-list" style="color:var(--accent);font-size:13px;text-decoration:none;font-weight:600">Full History</a>
 </header>
 
 <main>
   {% if not products %}
     <div class="empty">
-      No data yet. Click <b>Run scrape now</b> to fetch today's prices.
+      No data yet. The scraper runs daily via GitHub Actions at 11:00 AM (Asia/Taipei).
     </div>
   {% else %}
   <div class="grid">
     {% for p in products %}
       {% set cls = 'down' if p.delta < 0 else ('up' if p.delta > 0 else 'flat') %}
       {% set sign = '' if p.delta == 0 else ('+' if p.delta > 0 else '') %}
-      <a class="card" href="/product/{{ p.canonical_id }}">
+      <a class="card" href="/product/{{ p.unique_key }}">
         <div class="name" title="{{ p.product_name }}">{{ p.product_name }}</div>
         <div class="row">
-          <span class="price">NT${{ "{:,}".format(p.latest_price) }}</span>
-          {% if p.market_price and p.market_price > p.latest_price %}
-            <span class="market">NT${{ "{:,}".format(p.market_price) }}</span>
+          <span class="price">NT${{ "{:,}".format(p.discount_price) }}</span>
+          {% if p.original_price and p.original_price > p.discount_price %}
+            <span class="market">NT${{ "{:,}".format(p.original_price) }}</span>
           {% endif %}
           <span class="delta {{ cls }}">
             {{ sign }}{{ "{:,}".format(p.delta) }}
@@ -89,7 +81,7 @@
         </div>
         <svg class="spark" viewBox="0 0 200 50" width="100%" height="50"
              data-points='{{ p.spark|tojson }}'></svg>
-        <div class="id">id: {{ p.product_id }} · cid: {{ p.canonical_id[:8] }} · last: {{ p.latest_date }}</div>
+        <div class="id">key: {{ p.unique_key[:8] }} · last: {{ p.latest_date }}</div>
       </a>
     {% endfor %}
   </div>
@@ -97,7 +89,6 @@
 </main>
 
 <script>
-// --- Sparklines ---------------------------------------------------------
 document.querySelectorAll('svg.spark').forEach(svg => {
   const pts = JSON.parse(svg.dataset.points || '[]');
   if (pts.length < 2) return;
@@ -113,46 +104,6 @@ document.querySelectorAll('svg.spark').forEach(svg => {
   svg.innerHTML =
     `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" />` +
     `<circle cx="${xs(pts.length-1)}" cy="${ys(prices.at(-1))}" r="2.5" fill="${color}" />`;
-});
-
-// --- Scrape control -----------------------------------------------------
-const status = document.getElementById('status');
-const btn    = document.getElementById('scrape');
-const btnF   = document.getElementById('scrape-force');
-let polling = null;
-
-async function startScrape(force) {
-  btn.disabled = btnF.disabled = true;
-  const r = await fetch('/api/scrape', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({force})
-  });
-  const j = await r.json();
-  status.textContent = j.message;
-  if (!polling) polling = setInterval(pollStatus, 1500);
-}
-
-async function pollStatus() {
-  const r = await fetch('/api/scrape/status');
-  const j = await r.json();
-  status.textContent = j.message;
-  if (!j.running) {
-    clearInterval(polling); polling = null;
-    btn.disabled = btnF.disabled = false;
-    if (j.inserted > 0) setTimeout(() => location.reload(), 1200);
-  }
-}
-
-btn .addEventListener('click', () => startScrape(false));
-btnF.addEventListener('click', () => startScrape(true));
-
-// Resume polling if a job is already running when the page loads
-pollStatus().then(() => {
-  if (status.textContent.toLowerCase().includes('start') ||
-      status.textContent.toLowerCase().includes('launch')) {
-    polling = setInterval(pollStatus, 1500);
-    btn.disabled = btnF.disabled = true;
-  }
 });
 </script>
 </body>
