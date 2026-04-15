@@ -4,8 +4,8 @@ on:
   schedule:
     # 03:00 UTC = 11:00 AM Asia/Taipei
     - cron: "0 3 * * *"
-    # TEMPORARY: 07:45 UTC = 3:45 PM Asia/Taipei (remove after testing)
-    - cron: "45 7 15 4 *"
+    # TEMPORARY: 08:20 UTC = 4:20 PM Asia/Taipei (remove after testing)
+    - cron: "20 8 15 4 *"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
@@ -29,6 +29,21 @@ jobs:
 
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
+
+      - name: Clear today's data before re-scrape
+        run: |
+          python -c "
+          import os, psycopg2
+          from datetime import date, timezone, timedelta
+          tz = timezone(timedelta(hours=8))
+          today = date.today()
+          conn = psycopg2.connect(os.environ['POSTGRES_URL'])
+          cur = conn.cursor()
+          cur.execute('DELETE FROM prices WHERE scrape_date = %s', (today,))
+          print(f'Deleted {cur.rowcount} rows for {today}')
+          conn.commit()
+          conn.close()
+          "
 
       - name: Run scraper
         run: python scraper.py --force
