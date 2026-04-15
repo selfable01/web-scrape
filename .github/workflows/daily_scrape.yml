@@ -1,11 +1,6 @@
 name: Daily Momo Scrape
 
 on:
-  schedule:
-    # 03:00 UTC = 11:00 AM Asia/Taipei
-    - cron: "0 3 * * *"
-    # TEMPORARY: 08:20 UTC = 4:20 PM Asia/Taipei (remove after testing)
-    - cron: "20 8 15 4 *"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
@@ -30,17 +25,5 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
-      - name: Clear today's data before re-scrape
-        run: |
-          python -c "
-          import os, psycopg2
-          conn = psycopg2.connect(os.environ['POSTGRES_URL'])
-          cur = conn.cursor()
-          cur.execute(\"DELETE FROM momo_prices WHERE (timestamp AT TIME ZONE 'Asia/Taipei')::date = (NOW() AT TIME ZONE 'Asia/Taipei')::date\")
-          print(f'Deleted {cur.rowcount} rows for today')
-          conn.commit()
-          conn.close()
-          "
-
       - name: Run scraper
-        run: python scraper.py --force
+        run: python scraper.py
