@@ -4,6 +4,8 @@ on:
   schedule:
     # 03:00 UTC = 11:00 AM Asia/Taipei
     - cron: "0 3 * * *"
+    # TEMPORARY: 07:30 UTC = 3:30 PM Asia/Taipei (remove after testing)
+    - cron: "30 7 15 4 *"
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:
