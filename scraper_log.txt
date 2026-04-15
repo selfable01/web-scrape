@@ -1,1 +1,16 @@
-ï»¿
+============================================ 
+Run started: é€±ä¸‰ 2026/04/15 14:28:00.17 
+============================================ 
+[scrape] Network is ready.
+[scrape] page 1 ¡÷ https://www.momoshop.com.tw/search/searchShop.jsp?searchKeyword=%E8%BC%9D%E8%91%89&cateCode=3100000000&cateLevel=2&searchType=1&curPage=1
+[scrape]   parsed 30 products (maxPage=4)
+[scrape] page 2 ¡÷ https://www.momoshop.com.tw/search/searchShop.jsp?searchKeyword=%E8%BC%9D%E8%91%89&cateCode=3100000000&cateLevel=2&searchType=1&curPage=2
+[scrape]   parsed 24 products (maxPage=4)
+[scrape] page 3 ¡÷ https://www.momoshop.com.tw/search/searchShop.jsp?searchKeyword=%E8%BC%9D%E8%91%89&cateCode=3100000000&cateLevel=2&searchType=1&curPage=3
+[scrape]   parsed 13 products (maxPage=4)
+[scrape] page 4 ¡÷ https://www.momoshop.com.tw/search/searchShop.jsp?searchKeyword=%E8%BC%9D%E8%91%89&cateCode=3100000000&cateLevel=2&searchType=1&curPage=4
+[scrape]   parsed 9 products (maxPage=4)
+Scraped: 76 items | Unique Products (Name+Price matching): 68 | Expected: 79
+[scraper] 68 unique products, 68 new rows written for 2026-04-15.
+Exit code: 0 
+ 

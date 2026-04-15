@@ -13,7 +13,9 @@
       "Bash(python -c \"import db_manager; db_manager.init_db\\(\\); conn = db_manager.get_conn\\(\\).__enter__\\(\\); cur = conn.execute\\(\\\\\"DELETE FROM prices WHERE date = '2026-04-15'\\\\\"\\); print\\(f'Deleted {cur.rowcount} rows for 2026-04-15'\\); conn.commit\\(\\); conn.close\\(\\)\")",
       "Bash(python -c ' *)",
       "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
-      "Bash(python scraper.py --force)"
+      "Bash(python scraper.py --force)",
+      "Bash(python *)",
+      "Bash(powershell *)"
     ]
   }
 }
