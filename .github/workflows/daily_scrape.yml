@@ -34,13 +34,10 @@ jobs:
         run: |
           python -c "
           import os, psycopg2
-          from datetime import date, timezone, timedelta
-          tz = timezone(timedelta(hours=8))
-          today = date.today()
           conn = psycopg2.connect(os.environ['POSTGRES_URL'])
           cur = conn.cursor()
-          cur.execute('DELETE FROM prices WHERE scrape_date = %s', (today,))
-          print(f'Deleted {cur.rowcount} rows for {today}')
+          cur.execute(\"DELETE FROM momo_prices WHERE (timestamp AT TIME ZONE 'Asia/Taipei')::date = (NOW() AT TIME ZONE 'Asia/Taipei')::date\")
+          print(f'Deleted {cur.rowcount} rows for today')
           conn.commit()
           conn.close()
           "
