@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx skills:*)",
+      "Bash(where python:*)",
+      "Bash(ls:*)",
+      "Bash(python -c ':*)",
+      "Bash(python -X utf8 -c ':*)",
+      "Bash(python -X utf8 scraper.py --force)",
+      "Bash(schtasks *)",
+      "Bash(cmd.exe *)",
+      "Bash(powershell.exe *)",
+      "Bash(python -c \"import db_manager; db_manager.init_db\\(\\); conn = db_manager.get_conn\\(\\).__enter__\\(\\); cur = conn.execute\\(\\\\\"DELETE FROM prices WHERE date = '2026-04-15'\\\\\"\\); print\\(f'Deleted {cur.rowcount} rows for 2026-04-15'\\); conn.commit\\(\\); conn.close\\(\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(python scraper.py --force)"
+    ]
+  }
+}

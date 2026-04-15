@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Full Price History · 輝葉 Tracker</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg:#0f1115; --panel:#161a22; --line:#262c39; --text:#e6e8ee;
+    --muted:#8a93a6; --accent:#3b82f6;
+  }
+  * { box-sizing: border-box }
+  html,body { background:var(--bg); color:var(--text); margin:0;
+    font: 14px/1.5 -apple-system, "PingFang TC", "Microsoft JhengHei",
+          "Noto Sans CJK TC", sans-serif; }
+  header { padding:18px 32px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:12px }
+  header a { color:var(--accent); text-decoration:none; font-size:13px }
+  header h1 { font-size:18px; margin:0; font-weight:600 }
+  main { padding:24px 32px; max-width:1400px; margin:0 auto }
+  .summary { color:var(--muted); font-size:13px; margin-bottom:16px }
+  .table-wrap { background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; padding:16px; overflow-x:auto }
+  table { width:100%; border-collapse:collapse }
+  th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px }
+  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase;
+    cursor:pointer; user-select:none; white-space:nowrap }
+  th:hover { color:var(--text) }
+  th .arrow { font-size:10px; margin-left:4px }
+  td.num { text-align:right; font-variant-numeric:tabular-nums }
+  td a { color:var(--accent); text-decoration:none }
+  td a:hover { text-decoration:underline }
+  tr:hover td { background:rgba(59,130,246,0.04) }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← Dashboard</a>
+  <h1>Full Price History</h1>
+</header>
+
+<main>
+  <div class="summary">{{ records|length }} total records since Day 1</div>
+
+  <div class="table-wrap">
+    <table id="history-table">
+      <thead>
+        <tr>
+          <th data-col="date">Date <span class="arrow">▼</span></th>
+          <th data-col="product_name">Product Name <span class="arrow"></span></th>
+          <th data-col="product_id">ID <span class="arrow"></span></th>
+          <th data-col="price">Price <span class="arrow"></span></th>
+          <th data-col="market_price">Market Price <span class="arrow"></span></th>
+          <th>Link</th>
+        </tr>
+      </thead>
+      <tbody id="tbl"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const records = {{ records|tojson }};
+const tbody = document.getElementById('tbl');
+const fmt = n => n != null ? 'NT$' + n.toLocaleString() : '—';
+
+let sortCol = 'date';
+let sortAsc = false; // default: newest first
+
+function render() {
+  const sorted = [...records].sort((a, b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (va == null) va = '';
+    if (vb == null) vb = '';
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return sortAsc ? va - vb : vb - va;
+    }
+    va = String(va); vb = String(vb);
+    return sortAsc ? va.localeCompare(vb, 'zh-Hant') : vb.localeCompare(va, 'zh-Hant');
+  });
+
+  tbody.innerHTML = sorted.map(r => `<tr>
+    <td>${r.date}</td>
+    <td><a href="/product/${r.canonical_id}">${r.product_name}</a></td>
+    <td class="num">${r.product_id}</td>
+    <td class="num">${fmt(r.price)}</td>
+    <td class="num">${fmt(r.market_price)}</td>
+    <td>${r.url ? '<a href="' + r.url + '" target="_blank" rel="noopener">momo ↗</a>' : '—'}</td>
+  </tr>`).join('');
+}
+
+document.querySelectorAll('#history-table th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) {
+      sortAsc = !sortAsc;
+    } else {
+      sortCol = col;
+      sortAsc = (col === 'product_name'); // name defaults A→Z, others desc
+    }
+    // Update arrows
+    document.querySelectorAll('#history-table th .arrow').forEach(a => a.textContent = '');
+    th.querySelector('.arrow').textContent = sortAsc ? '▲' : '▼';
+    render();
+  });
+});
+
+render();
+</script>
+</body>
+</html>
