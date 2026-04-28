@@ -2,9 +2,9 @@ name: Hourly Momo Scrape
 
 on:
   schedule:
-    # Runs every hour at :00 UTC. The scraper checks which users are due
-    # based on their scrape_time setting (Asia/Taipei timezone).
-    - cron: "0 * * * *"
+    # Runs every 15 minutes. Most runs just check the DB and exit instantly
+    # (no browser launch) if no users are due. Only scrapes when needed.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     # Manual trigger from GitHub UI or API (e.g., "立即爬取" button)
 

@@ -127,10 +127,12 @@ def make_unique_key(product_name: str, original_price: int | None) -> str:
 # ---------------------------------------------------------------------------
 def get_users_due_now() -> list[dict]:
     """
-    Users whose scrape_time hour has arrived AND haven't been scraped today.
+    Users whose scrape_time has passed (full HH:MM comparison, not just hour)
+    AND haven't been scraped today.
 
-    Example: user scrape_time=14:00, current Taipei time=15:30,
-    last_scrape_at is yesterday → this user is due.
+    Example: user scrape_time=10:15, current Taipei time=10:20,
+    last_scrape_at is NULL → this user is due.
+    Cron runs every 15 min, so max wait is ~15 minutes after scrape_time.
     """
     conn = get_conn()
     try:
@@ -138,8 +140,7 @@ def get_users_due_now() -> list[dict]:
             cur.execute("""
                 SELECT id, username, scrape_time, history_days
                   FROM users
-                 WHERE EXTRACT(HOUR FROM (NOW() AT TIME ZONE 'Asia/Taipei')::time)
-                       >= EXTRACT(HOUR FROM scrape_time)
+                 WHERE (NOW() AT TIME ZONE 'Asia/Taipei')::time >= scrape_time
                    AND (
                        last_scrape_at IS NULL
                        OR (last_scrape_at AT TIME ZONE 'Asia/Taipei')::date
