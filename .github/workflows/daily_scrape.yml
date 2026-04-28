@@ -2,11 +2,10 @@ name: Hourly Momo Scrape
 
 on:
   schedule:
-    # Runs every 5 minutes. Most runs just check the DB and exit instantly
-    # (no browser launch, ~2 seconds) if no users are due.
-    - cron: "*/5 * * * *"
+    # Backup: runs every 30 min in case external trigger misses.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
-    # Manual trigger from GitHub UI or API (e.g., "立即爬取" button)
+    # Triggered by cron-job.org every 5 min, or manually from UI / "立即爬取" button
 
 jobs:
   scrape:
