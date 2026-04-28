@@ -21,7 +21,7 @@ POST /settings                  Update scrape settings
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as dt_time
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for, flash
 from flask_login import (
@@ -51,6 +51,7 @@ TW_TZ = timezone(timedelta(hours=8))
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
+login_manager.login_message = "請先登入。"
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +107,29 @@ def _tw_now():
 def _user_prices(user_id: int):
     """Return a query scoped to the current user's prices."""
     return MomoPrice.query.filter(MomoPrice.user_id == user_id)
+
+
+def _next_scrape_display(user) -> str:
+    """Compute a human-readable string for the user's next scrape time."""
+    now = _tw_now()
+    today = now.date()
+    scrape_hour = user.scrape_time.hour
+
+    # Has the scraper already run today for this user?
+    already_today = (
+        user.last_scrape_at is not None
+        and user.last_scrape_at.astimezone(TW_TZ).date() == today
+    )
+
+    if already_today:
+        # Next scrape is tomorrow at user's scrape_time
+        next_date = today + timedelta(days=1)
+        return f"明��� {user.scrape_time.strftime('%H:%M')}（台北時間）"
+    elif now.hour >= scrape_hour:
+        # Due now — will run at next hourly check
+        return "即將執行（下一個整點）"
+    else:
+        return f"今天 {user.scrape_time.strftime('%H:%M')}（台北時間）"
 
 
 def _latest_for_each_product(user_id: int, days: int = 30) -> list[dict]:
@@ -190,16 +214,16 @@ def register():
         password = request.form.get("password", "")
 
         if not username or not email or not password:
-            flash("All fields are required.", "error")
-            return render_template("register.html")
+            flash("所有欄位皆為必填。", "error")
+            return render_template("register.html", registered=False)
 
         if len(password) < 6:
-            flash("Password must be at least 6 characters.", "error")
-            return render_template("register.html")
+            flash("密碼須至少 6 個字元。", "error")
+            return render_template("register.html", registered=False)
 
         if User.query.filter((User.username == username) | (User.email == email)).first():
-            flash("Username or email already taken.", "error")
-            return render_template("register.html")
+            flash("使用者名稱或電子郵件已被使用。", "error")
+            return render_template("register.html", registered=False)
 
         user = User(username=username, email=email)
         user.set_password(password)
@@ -207,10 +231,9 @@ def register():
         db.session.commit()
 
         login_user(user)
-        flash("Account created! Configure your scrape settings below.", "success")
-        return redirect(url_for("settings"))
+        return render_template("register.html", registered=True)
 
-    return render_template("register.html")
+    return render_template("register.html", registered=False)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -228,7 +251,7 @@ def login():
             next_page = request.args.get("next")
             return redirect(next_page or url_for("index"))
 
-        flash("Invalid username or password.", "error")
+        flash("使用者名稱或密碼錯誤。", "error")
 
     return render_template("login.html")
 
@@ -253,23 +276,32 @@ def settings():
         try:
             parsed_time = datetime.strptime(scrape_time_str, "%H:%M").time()
         except ValueError:
-            flash("Invalid time format. Use HH:MM (e.g., 14:00).", "error")
-            return render_template("settings.html", user=current_user)
+            flash("時間格式錯誤，請使用 HH:MM（例如 14:00）。", "error")
+            return render_template("settings.html", user=current_user,
+                                   next_scrape_display=_next_scrape_display(current_user))
 
         try:
             parsed_days = int(history_days)
             if parsed_days < 1 or parsed_days > 365:
                 raise ValueError
         except ValueError:
-            flash("History days must be a number between 1 and 365.", "error")
-            return render_template("settings.html", user=current_user)
+            flash("歷史天數須為 1 到 365 之間的數字。", "error")
+            return render_template("settings.html", user=current_user,
+                                   next_scrape_display=_next_scrape_display(current_user))
+
+        # If scrape_time changed, reset last_scrape_at so the scheduler
+        # treats this user as "not yet scraped today" — enabling a re-scrape
+        # at the new time even if the old time already ran today.
+        if current_user.scrape_time != parsed_time:
+            current_user.last_scrape_at = None
 
         current_user.scrape_time = parsed_time
         current_user.history_days = parsed_days
         db.session.commit()
-        flash("Settings saved.", "success")
+        flash("設定已儲存。", "success")
 
-    return render_template("settings.html", user=current_user)
+    return render_template("settings.html", user=current_user,
+                           next_scrape_display=_next_scrape_display(current_user))
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +320,8 @@ def index():
                            products=products,
                            today=today,
                            has_today=has_today,
-                           user=current_user)
+                           user=current_user,
+                           next_scrape_display=_next_scrape_display(current_user))
 
 
 @app.route("/full-list")
@@ -319,7 +352,7 @@ def product_detail(unique_key: str):
     days = int(request.args.get("days", current_user.history_days))
     history = _history_series(current_user.id, unique_key, days=days)
     if not history:
-        return f"No history for unique_key={unique_key}", 404
+        return f"找不到 unique_key={unique_key} 的歷史紀錄", 404
     latest = (
         _user_prices(current_user.id)
         .filter(MomoPrice.unique_key == unique_key)

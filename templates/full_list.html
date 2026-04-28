@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<title>Full Price History · 輝葉 Tracker</title>
+<title>完整價格紀錄 · 輝葉追蹤器</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
@@ -23,7 +23,7 @@
     border-radius:12px; padding:16px; overflow-x:auto }
   table { width:100%; border-collapse:collapse }
   th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px }
-  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase;
+  th { color:var(--muted); font-weight:500; font-size:12px;
     cursor:pointer; user-select:none; white-space:nowrap }
   th:hover { color:var(--text) }
   th .arrow { font-size:10px; margin-left:4px }
@@ -35,21 +35,21 @@
 </head>
 <body>
 <header>
-  <a href="/">Dashboard</a>
-  <h1>Full Price History</h1>
+  <a href="/">首頁</a>
+  <h1>完整價格紀錄</h1>
 </header>
 
 <main>
-  <div class="summary">{{ records|length }} total records since Day 1</div>
+  <div class="summary">自開始追蹤以來共 {{ records|length }} 筆紀錄</div>
 
   <div class="table-wrap">
     <table id="history-table">
       <thead>
         <tr>
-          <th data-col="date">Date <span class="arrow">▼</span></th>
-          <th data-col="product_name">Product Name <span class="arrow"></span></th>
-          <th data-col="discount_price">Discount Price <span class="arrow"></span></th>
-          <th data-col="original_price">Original Price <span class="arrow"></span></th>
+          <th data-col="date">日期 <span class="arrow">▼</span></th>
+          <th data-col="product_name">商品名稱 <span class="arrow"></span></th>
+          <th data-col="discount_price">折扣價 <span class="arrow"></span></th>
+          <th data-col="original_price">原價 <span class="arrow"></span></th>
         </tr>
       </thead>
       <tbody id="tbl"></tbody>

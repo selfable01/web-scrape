@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<title>輝葉 momo Price Tracker</title>
+<title>輝葉 momo 價格追蹤器</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
@@ -48,21 +48,22 @@
 </head>
 <body>
 <header>
-  <h1>輝葉 (HUEI YEH) · 按摩用品 Price Tracker</h1>
-  <span class="meta">Today: {{ today }} ·
-    {% if has_today %}<span style="color:var(--down)">scraped</span>
-    {% else %}<span style="color:var(--up)">not yet scraped</span>{% endif %}</span>
+  <h1>輝葉 (HUEI YEH) · 按摩用品價格追蹤</h1>
+  <span class="meta">今天：{{ today }} ·
+    {% if has_today %}<span style="color:var(--down)">已爬取</span>
+    {% else %}<span style="color:var(--up)">尚未爬取</span>{% endif %}
+    · 下次爬蟲：{{ next_scrape_display }}</span>
   <span class="spacer"></span>
-  <span id="status">{{ products|length }} products tracked</span>
-  <a href="/settings" style="color:var(--accent);font-size:13px;text-decoration:none;font-weight:600">Settings</a>
-  <a href="/full-list" style="color:var(--accent);font-size:13px;text-decoration:none;font-weight:600">Full History</a>
-  <a href="/logout" style="color:var(--muted);font-size:13px;text-decoration:none">Logout</a>
+  <span id="status">追蹤 {{ products|length }} 項商品</span>
+  <a href="/settings" style="color:var(--accent);font-size:13px;text-decoration:none;font-weight:600">設定</a>
+  <a href="/full-list" style="color:var(--accent);font-size:13px;text-decoration:none;font-weight:600">完整紀錄</a>
+  <a href="/logout" style="color:var(--muted);font-size:13px;text-decoration:none">登出</a>
 </header>
 
 <main>
   {% if not products %}
     <div class="empty">
-      No data yet. The scraper runs daily via GitHub Actions at 11:00 AM (Asia/Taipei).
+      尚無資料。爬蟲將於每天 {{ user.scrape_time.strftime('%H:%M') }}（台北時間）自動執行。
     </div>
   {% else %}
   <div class="grid">
@@ -83,7 +84,7 @@
         </div>
         <svg class="spark" viewBox="0 0 200 50" width="100%" height="50"
              data-points='{{ p.spark|tojson }}'></svg>
-        <div class="id">key: {{ p.unique_key[:8] }} · last: {{ p.latest_date }}</div>
+        <div class="id">識別碼：{{ p.unique_key[:8] }} · 最後更新：{{ p.latest_date }}</div>
       </a>
     {% endfor %}
   </div>

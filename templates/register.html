@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<title>Register — momo Price Tracker</title>
+<title>註冊 — momo 價格追蹤器</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
@@ -25,42 +25,58 @@
     font-size:14px; margin-bottom:16px; outline:none;
   }
   input:focus { border-color:var(--accent) }
-  button {
-    width:100%; padding:10px; background:var(--accent); color:#fff;
+  button, .btn {
+    display:block; width:100%; padding:10px; background:var(--accent); color:#fff;
     border:none; border-radius:8px; font-size:14px; font-weight:600;
-    cursor:pointer; transition: opacity .15s;
+    cursor:pointer; transition: opacity .15s; text-align:center; text-decoration:none;
   }
-  button:hover { opacity:.85 }
+  button:hover, .btn:hover { opacity:.85 }
+  .btn-outline {
+    background:transparent; border:1px solid var(--line); color:var(--text);
+    margin-top:12px;
+  }
+  .btn-outline:hover { border-color:var(--accent); color:var(--accent) }
   .flash { padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:16px }
   .flash.error { background:rgba(255,90,95,.12); color:var(--up) }
   .flash.success { background:rgba(34,197,94,.12); color:var(--down) }
   .link { text-align:center; margin-top:20px; font-size:13px }
   .link a { color:var(--accent); text-decoration:none }
   .hint { color:var(--muted); font-size:11px; margin-top:-12px; margin-bottom:16px }
+  .post-register { text-align:center; margin-top:24px }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Create Account</h1>
-  <p class="sub">momo Price Tracker</p>
-  <div class="card">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for cat, msg in messages %}
-        <div class="flash {{ cat }}">{{ msg }}</div>
-      {% endfor %}
-    {% endwith %}
-    <form method="post">
-      <label for="username">Username</label>
-      <input type="text" id="username" name="username" required autofocus>
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" required>
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" required>
-      <div class="hint">At least 6 characters</div>
-      <button type="submit">Create Account</button>
-    </form>
-  </div>
-  <div class="link">Already have an account? <a href="/login">Sign in</a></div>
+  {% if registered %}
+    <h1>註冊成功！</h1>
+    <p class="sub">歡迎加入 momo 價格追蹤器</p>
+    <div class="card" style="text-align:center">
+      <p style="margin:0 0 16px; font-size:15px">您的帳號已建立完成。</p>
+      <a class="btn" href="/">前往首頁</a>
+      <a class="btn btn-outline" href="/settings">設定爬蟲排程</a>
+    </div>
+  {% else %}
+    <h1>建立帳號</h1>
+    <p class="sub">momo 價格追蹤器</p>
+    <div class="card">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for cat, msg in messages %}
+          <div class="flash {{ cat }}">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+      <form method="post">
+        <label for="username">使用者名稱</label>
+        <input type="text" id="username" name="username" required autofocus>
+        <label for="email">電子郵件</label>
+        <input type="email" id="email" name="email" required>
+        <label for="password">密碼</label>
+        <input type="password" id="password" name="password" required>
+        <div class="hint">至少 6 個字元</div>
+        <button type="submit">建立帳號</button>
+      </form>
+    </div>
+    <div class="link">已經有帳號了？ <a href="/login">登入</a></div>
+  {% endif %}
 </div>
 </body>
 </html>

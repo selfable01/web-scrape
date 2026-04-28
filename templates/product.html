@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<title>{{ product_name }} · Price History</title>
+<title>{{ product_name }} · 價格走勢</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
@@ -22,7 +22,7 @@
   .stats { display:flex; gap:24px; flex-wrap:wrap; margin-bottom:20px }
   .stat { background:var(--panel); border:1px solid var(--line);
     border-radius:10px; padding:12px 16px; min-width:140px }
-  .stat .label { color:var(--muted); font-size:12px; text-transform:uppercase;
+  .stat .label { color:var(--muted); font-size:12px;
     letter-spacing:.05em }
   .stat .val { font-size:20px; font-weight:700; margin-top:3px }
   .chart-wrap { background:var(--panel); border:1px solid var(--line);
@@ -35,28 +35,28 @@
   .ranges a.active { background:var(--accent); color:white; border-color:var(--accent) }
   table { width:100%; border-collapse:collapse; margin-top:8px }
   th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px }
-  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase }
+  th { color:var(--muted); font-weight:500; font-size:12px }
   td.num { text-align:right; font-variant-numeric: tabular-nums }
 </style>
 </head>
 <body>
 <header>
-  <a href="/">Back to dashboard</a>
+  <a href="/">返回首頁</a>
 </header>
 
 <main>
   <h1>{{ product_name }}</h1>
   <div class="meta">
-    Key <code>{{ unique_key[:8] }}</code>
+    識別碼 <code>{{ unique_key[:8] }}</code>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="label">Latest</div><div class="val" id="s-latest">—</div></div>
-    <div class="stat"><div class="label">Lowest ({{ days }}d)</div><div class="val" id="s-low">—</div></div>
-    <div class="stat"><div class="label">Highest ({{ days }}d)</div><div class="val" id="s-high">—</div></div>
-    <div class="stat"><div class="label">Change ({{ days }}d)</div><div class="val" id="s-change">—</div></div>
+    <div class="stat"><div class="label">最新價格</div><div class="val" id="s-latest">—</div></div>
+    <div class="stat"><div class="label">最低（{{ days }}天）</div><div class="val" id="s-low">—</div></div>
+    <div class="stat"><div class="label">最高（{{ days }}天）</div><div class="val" id="s-high">—</div></div>
+    <div class="stat"><div class="label">變動（{{ days }}天）</div><div class="val" id="s-change">—</div></div>
     {% if original_price %}
-    <div class="stat"><div class="label">List price</div>
+    <div class="stat"><div class="label">定價</div>
       <div class="val">NT${{ "{:,}".format(original_price) }}</div></div>
     {% endif %}
   </div>
@@ -64,7 +64,7 @@
   <div class="chart-wrap">
     <div class="ranges">
       {% for d in [7, 14, 30, 90] %}
-        <a href="?days={{ d }}" class="{{ 'active' if d == days else '' }}">{{ d }}d</a>
+        <a href="?days={{ d }}" class="{{ 'active' if d == days else '' }}">{{ d }}天</a>
       {% endfor %}
     </div>
     <svg id="chart" viewBox="0 0 900 360" width="100%" height="360"></svg>
@@ -72,7 +72,7 @@
 
   <div class="chart-wrap">
     <table>
-      <thead><tr><th>Date</th><th class="num">Price</th><th class="num">vs prev</th></tr></thead>
+      <thead><tr><th>日期</th><th class="num">價格</th><th class="num">與前日比較</th></tr></thead>
       <tbody id="tbl"></tbody>
     </table>
   </div>

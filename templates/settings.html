@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<title>Settings — momo Price Tracker</title>
+<title>設定 — momo 價格追蹤器</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
@@ -47,15 +47,15 @@
 </head>
 <body>
 <header>
-  <h1>Settings</h1>
+  <h1>設定</h1>
   <span class="spacer"></span>
-  <a href="/">Dashboard</a>
-  <a href="/logout">Logout</a>
+  <a href="/">首頁</a>
+  <a href="/logout" style="color:var(--muted)">登出</a>
 </header>
 
 <div class="wrap">
-  <h2>Scrape Settings</h2>
-  <p class="sub">Configure when and how much data to collect for your account.</p>
+  <h2>爬蟲設定</h2>
+  <p class="sub">設定您的每日爬蟲時間與歷史資料範圍。</p>
   <div class="card">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for cat, msg in messages %}
@@ -63,28 +63,30 @@
       {% endfor %}
     {% endwith %}
     <form method="post">
-      <label for="scrape_time">Daily Scrape Time (Asia/Taipei)</label>
+      <label for="scrape_time">每日爬蟲時間（台北時間）</label>
       <input type="time" id="scrape_time" name="scrape_time"
              value="{{ user.scrape_time.strftime('%H:%M') }}" required>
-      <div class="hint">The scraper checks every hour. Your scrape will run at the first
-        hourly check after this time. Example: setting 14:30 means the scrape runs at 15:00.</div>
+      <div class="hint">爬蟲每小時檢查一次。您的爬蟲會在此時間之後的下一個整點執行。
+        例如：設定 14:30 表示爬蟲會在 15:00 執行。
+        若修改時間，今天尚未爬取則按新時間執行；若已爬取則會依新時間再次爬取。</div>
 
-      <label for="history_days">History Range (days)</label>
+      <label for="history_days">歷史資料範圍（天）</label>
       <input type="number" id="history_days" name="history_days"
              value="{{ user.history_days }}" min="1" max="365" required>
-      <div class="hint">How many days of price history to show on your dashboard (1-365).</div>
+      <div class="hint">在首頁顯示多少天的價格歷史紀錄（1-365）。</div>
 
-      <button type="submit">Save Settings</button>
+      <button type="submit">儲存設定</button>
     </form>
   </div>
 
   <div class="info">
-    <strong>Account:</strong> {{ user.username }} ({{ user.email }})<br>
-    <strong>Member since:</strong> {{ user.created_at.strftime('%Y-%m-%d') }}<br>
+    <strong>帳號：</strong>{{ user.username }}（{{ user.email }}）<br>
+    <strong>註冊日期：</strong>{{ user.created_at.strftime('%Y-%m-%d') }}<br>
+    <strong>下次爬蟲時間：</strong>{{ next_scrape_display }}<br>
     {% if user.last_scrape_at %}
-      <strong>Last scrape:</strong> {{ user.last_scrape_at.strftime('%Y-%m-%d %H:%M') }} (Taipei)
+      <strong>上次爬蟲：</strong>{{ user.last_scrape_at.strftime('%Y-%m-%d %H:%M') }}（台北時間）
     {% else %}
-      <strong>Last scrape:</strong> Not yet run
+      <strong>上次爬蟲：</strong>尚未執行
     {% endif %}
   </div>
 </div>
