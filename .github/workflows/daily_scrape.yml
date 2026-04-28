@@ -2,12 +2,16 @@ name: Hourly Momo Scrape
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Every hour, on the hour (UTC)
-  workflow_dispatch:       # Allow manual trigger from GitHub UI or API
+    # Runs every hour at :00 UTC. The scraper checks which users are due
+    # based on their scrape_time setting (Asia/Taipei timezone).
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    # Manual trigger from GitHub UI or API (e.g., "立即爬取" button)
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
 
@@ -21,8 +25,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python dependencies
-        run: |
-          pip install playwright playwright-stealth psycopg2-binary
+        run: pip install playwright playwright-stealth psycopg2-binary
 
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
