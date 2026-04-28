@@ -204,8 +204,14 @@ def insert_prices(records: list[dict], user_id: int) -> int:
                         INSERT INTO momo_prices
                             (user_id, product_name, original_price, discount_price,
                              timestamp, unique_key)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (user_id, unique_key, (timestamp::date)) DO NOTHING
+                        SELECT %s, %s, %s, %s, %s, %s
+                         WHERE NOT EXISTS (
+                            SELECT 1 FROM momo_prices
+                             WHERE user_id = %s
+                               AND unique_key = %s
+                               AND CAST(timestamp AT TIME ZONE 'Asia/Taipei' AS date)
+                                   = CAST(%s AT TIME ZONE 'Asia/Taipei' AS date)
+                         )
                     """, (
                         user_id,
                         r["product_name"],
@@ -213,6 +219,9 @@ def insert_prices(records: list[dict], user_id: int) -> int:
                         r["discount_price"],
                         now,
                         r["unique_key"],
+                        user_id,
+                        r["unique_key"],
+                        now,
                     ))
                     if cur.rowcount > 0:
                         inserted += 1

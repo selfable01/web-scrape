@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS momo_prices (
 
 -- Prevent duplicate product on the same calendar day per user
 CREATE UNIQUE INDEX IF NOT EXISTS uix_momo_prices_user_key_day
-    ON momo_prices (user_id, unique_key, (timestamp::date));
+    ON momo_prices (user_id, unique_key, CAST(timestamp AT TIME ZONE 'Asia/Taipei' AS date));
 
 -- Fast lookups by product
 CREATE INDEX IF NOT EXISTS idx_momo_prices_key
