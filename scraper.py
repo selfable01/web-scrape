@@ -106,10 +106,10 @@ def init_db():
                     unique_key      TEXT        NOT NULL
                 );
             """)
-            cur.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uix_momo_prices_user_key_day
-                    ON momo_prices (user_id, unique_key, (timestamp::date));
-            """)
+            # The unique expression index (uix_momo_prices_user_key_day) must be
+            # created via schema.sql or migration since Postgres requires IMMUTABLE
+            # functions in index expressions. We skip it here — it already exists
+            # if the DB was set up correctly.
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_momo_prices_key
                     ON momo_prices (unique_key);
