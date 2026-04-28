@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>找不到資料 — momo 價格追蹤器</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg:#0f1115; --panel:#161a22; --line:#262c39; --text:#e6e8ee;
+    --muted:#8a93a6; --accent:#3b82f6;
+  }
+  * { box-sizing: border-box }
+  html,body { background:var(--bg); color:var(--text); margin:0;
+    font: 14px/1.5 -apple-system, "PingFang TC", "Microsoft JhengHei",
+          "Noto Sans CJK TC", sans-serif; }
+  .wrap { max-width:500px; margin:120px auto; text-align:center; padding:0 24px }
+  h1 { font-size:20px; margin:0 0 12px }
+  p { color:var(--muted); margin:0 0 24px }
+  code { background:var(--panel); padding:2px 8px; border-radius:4px; font-size:13px }
+  a { color:var(--accent); text-decoration:none; font-weight:600 }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>找不到此商品的歷史紀錄</h1>
+  <p>識別碼 <code>{{ unique_key[:8] }}</code> 在您的帳號中沒有任何資料。</p>
+  <a href="/">返回首頁</a>
+</div>
+</body>
+</html>

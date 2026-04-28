@@ -459,10 +459,28 @@ def full_list():
 @app.route("/product/<unique_key>")
 @login_required
 def product_detail(unique_key: str):
-    days = int(request.args.get("days", current_user.history_days))
-    history = _history_series(current_user.id, unique_key, days=days)
+    days = int(request.args.get("days", 0))  # 0 = show all data
+
+    if days > 0:
+        history = _history_series(current_user.id, unique_key, days=days)
+    else:
+        # No day limit — return everything for this product
+        rows = (
+            _user_prices(current_user.id)
+            .filter(MomoPrice.unique_key == unique_key)
+            .order_by(MomoPrice.timestamp.asc())
+            .all()
+        )
+        history = [
+            {"date": r.timestamp.strftime("%Y-%m-%d"),
+             "price": r.discount_price,
+             "original_price": r.original_price}
+            for r in rows
+        ]
+
     if not history:
-        return f"找不到 unique_key={unique_key} 的歷史紀錄", 404
+        return render_template("not_found.html", unique_key=unique_key), 404
+
     latest = (
         _user_prices(current_user.id)
         .filter(MomoPrice.unique_key == unique_key)

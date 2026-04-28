@@ -52,9 +52,9 @@
 
   <div class="stats">
     <div class="stat"><div class="label">最新價格</div><div class="val" id="s-latest">—</div></div>
-    <div class="stat"><div class="label">最低（{{ days }}天）</div><div class="val" id="s-low">—</div></div>
-    <div class="stat"><div class="label">最高（{{ days }}天）</div><div class="val" id="s-high">—</div></div>
-    <div class="stat"><div class="label">變動（{{ days }}天）</div><div class="val" id="s-change">—</div></div>
+    <div class="stat"><div class="label">最低{{ '（全部）' if days == 0 else '（%d天）' % days }}</div><div class="val" id="s-low">—</div></div>
+    <div class="stat"><div class="label">最高{{ '（全部）' if days == 0 else '（%d天）' % days }}</div><div class="val" id="s-high">—</div></div>
+    <div class="stat"><div class="label">變動{{ '（全部）' if days == 0 else '（%d天）' % days }}</div><div class="val" id="s-change">—</div></div>
     {% if original_price %}
     <div class="stat"><div class="label">定價</div>
       <div class="val">NT${{ "{:,}".format(original_price) }}</div></div>
@@ -63,6 +63,7 @@
 
   <div class="chart-wrap">
     <div class="ranges">
+      <a href="?days=0" class="{{ 'active' if days == 0 else '' }}">全部</a>
       {% for d in [7, 14, 30, 90] %}
         <a href="?days={{ d }}" class="{{ 'active' if d == days else '' }}">{{ d }}天</a>
       {% endfor %}
