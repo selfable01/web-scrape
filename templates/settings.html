@@ -83,7 +83,7 @@
       <label for="scrape_time">每日爬蟲時間（台北時間）</label>
       <input type="time" id="scrape_time" name="scrape_time"
              value="{{ user.scrape_time.strftime('%H:%M') }}" required>
-      <div class="hint">爬蟲每 15 分鐘檢查一次，設定 10:15 表示約在 10:15~10:30 間執行。
+      <div class="hint">爬蟲每 5 分鐘檢查一次，設定 09:52 表示約在 09:52~09:57 間執行。
         若修改時間，今天尚未爬取則按新時間執行；若已爬取則會依新時間再次爬取。</div>
 
       <label for="history_days">歷史資料範圍（天）</label>

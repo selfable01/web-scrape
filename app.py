@@ -129,7 +129,7 @@ def _next_scrape_display(user) -> str:
         tomorrow = today + timedelta(days=1)
         return "".join(["\u660e\u5929 ", time_str, "\uff08\u53f0\u5317\u6642\u9593\uff09"])
     elif now.time() >= user.scrape_time:
-        return "\u5373\u5c07\u57f7\u884c\uff08\u6700\u591a\u7b49 15 \u5206\u9418\uff09"
+        return "\u5373\u5c07\u57f7\u884c\uff08\u6700\u591a\u7b49 5 \u5206\u9418\uff09"
     else:
         return "".join(["\u4eca\u5929 ", time_str, "\uff08\u53f0\u5317\u6642\u9593\uff09"])
 
