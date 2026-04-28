@@ -1,7 +1,9 @@
-name: Daily Momo Scrape
+name: Hourly Momo Scrape
 
 on:
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+  schedule:
+    - cron: "0 * * * *"   # Every hour, on the hour (UTC)
+  workflow_dispatch:       # Allow manual trigger from GitHub UI
 
 jobs:
   scrape:
@@ -25,5 +27,5 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
-      - name: Run scraper
-        run: python scraper.py
+      - name: Check schedule and scrape for due users
+        run: python scraper.py --check-schedule

@@ -6,9 +6,16 @@ via the POSTGRES_URL environment variable.
 
 Routes
 ------
-GET  /           Dashboard: top products + 7-day price trend chart
-GET  /full-list  Every record ever saved since Day 1 (sortable table)
-GET  /product/<unique_key>  Detail page with full price history chart
+GET  /                          Dashboard: top products + 7-day price trend chart
+GET  /full-list                 Every record ever saved since Day 1 (sortable table)
+GET  /product/<unique_key>      Detail page with full price history chart
+GET  /register                  Registration form
+POST /register                  Create account
+GET  /login                     Login form
+POST /login                     Authenticate
+GET  /logout                    Log out
+GET  /settings                  User scrape settings
+POST /settings                  Update scrape settings
 """
 
 from __future__ import annotations
@@ -16,14 +23,20 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for, flash
+from flask_login import (
+    LoginManager, UserMixin, login_user, logout_user,
+    login_required, current_user,
+)
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # ---------------------------------------------------------------------------
 # App + DB setup
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 app.json.ensure_ascii = False  # emit real CJK chars, not \uXXXX escapes
+app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-production")
 
 db_url = os.environ.get("POSTGRES_URL", "")
 if db_url.startswith("postgres://"):
@@ -36,20 +49,51 @@ db = SQLAlchemy(app)
 
 TW_TZ = timezone(timedelta(hours=8))
 
+login_manager = LoginManager(app)
+login_manager.login_view = "login"
+
 
 # ---------------------------------------------------------------------------
-# Model
+# Models
 # ---------------------------------------------------------------------------
+class User(UserMixin, db.Model):
+    __tablename__ = "users"
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.Text, unique=True, nullable=False)
+    email = db.Column(db.Text, unique=True, nullable=False)
+    password_hash = db.Column(db.Text, nullable=False)
+    scrape_time = db.Column(db.Time, nullable=False, default=lambda: datetime.strptime("11:00", "%H:%M").time())
+    history_days = db.Column(db.Integer, nullable=False, default=7)
+    last_scrape_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(TW_TZ))
+
+    prices = db.relationship("MomoPrice", backref="owner", lazy="dynamic")
+
+    def set_password(self, password: str):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password_hash, password)
+
+
 class MomoPrice(db.Model):
     __tablename__ = "momo_prices"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     product_name = db.Column(db.Text, nullable=False)
     original_price = db.Column(db.Integer)
     discount_price = db.Column(db.Integer, nullable=False)
     timestamp = db.Column(db.DateTime(timezone=True), nullable=False,
                           default=lambda: datetime.now(TW_TZ))
     unique_key = db.Column(db.Text, nullable=False)
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get(User, int(user_id))
 
 
 # ---------------------------------------------------------------------------
@@ -59,12 +103,17 @@ def _tw_now():
     return datetime.now(TW_TZ)
 
 
-def _latest_for_each_product(days: int = 30) -> list[dict]:
+def _user_prices(user_id: int):
+    """Return a query scoped to the current user's prices."""
+    return MomoPrice.query.filter(MomoPrice.user_id == user_id)
+
+
+def _latest_for_each_product(user_id: int, days: int = 30) -> list[dict]:
     """One row per product: latest price + price from `days` ago for delta."""
     cutoff = _tw_now() - timedelta(days=days)
 
     rows = (
-        MomoPrice.query
+        _user_prices(user_id)
         .filter(MomoPrice.timestamp >= cutoff)
         .order_by(MomoPrice.timestamp.asc())
         .all()
@@ -96,11 +145,11 @@ def _latest_for_each_product(days: int = 30) -> list[dict]:
     return result
 
 
-def _history_series(unique_key: str, days: int) -> list[dict]:
+def _history_series(user_id: int, unique_key: str, days: int) -> list[dict]:
     """Price history for one product over `days` days."""
     cutoff = _tw_now() - timedelta(days=days)
     rows = (
-        MomoPrice.query
+        _user_prices(user_id)
         .filter(MomoPrice.unique_key == unique_key,
                 MomoPrice.timestamp >= cutoff)
         .order_by(MomoPrice.timestamp.asc())
@@ -116,11 +165,11 @@ def _history_series(unique_key: str, days: int) -> list[dict]:
     ]
 
 
-def _has_today_data() -> bool:
-    """Check if there's data for today (Asia/Taipei)."""
+def _has_today_data(user_id: int) -> bool:
+    """Check if there's data for today (Asia/Taipei) for this user."""
     today = _tw_now().date()
     row = (
-        MomoPrice.query
+        _user_prices(user_id)
         .filter(db.func.date(MomoPrice.timestamp) >= str(today))
         .first()
     )
@@ -128,26 +177,126 @@ def _has_today_data() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+
+        if not username or not email or not password:
+            flash("All fields are required.", "error")
+            return render_template("register.html")
+
+        if len(password) < 6:
+            flash("Password must be at least 6 characters.", "error")
+            return render_template("register.html")
+
+        if User.query.filter((User.username == username) | (User.email == email)).first():
+            flash("Username or email already taken.", "error")
+            return render_template("register.html")
+
+        user = User(username=username, email=email)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+
+        login_user(user)
+        flash("Account created! Configure your scrape settings below.", "success")
+        return redirect(url_for("settings"))
+
+    return render_template("register.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            login_user(user)
+            next_page = request.args.get("next")
+            return redirect(next_page or url_for("index"))
+
+        flash("Invalid username or password.", "error")
+
+    return render_template("login.html")
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------------------------
+# Settings route
+# ---------------------------------------------------------------------------
+@app.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings():
+    if request.method == "POST":
+        scrape_time_str = request.form.get("scrape_time", "11:00").strip()
+        history_days = request.form.get("history_days", "7").strip()
+
+        try:
+            parsed_time = datetime.strptime(scrape_time_str, "%H:%M").time()
+        except ValueError:
+            flash("Invalid time format. Use HH:MM (e.g., 14:00).", "error")
+            return render_template("settings.html", user=current_user)
+
+        try:
+            parsed_days = int(history_days)
+            if parsed_days < 1 or parsed_days > 365:
+                raise ValueError
+        except ValueError:
+            flash("History days must be a number between 1 and 365.", "error")
+            return render_template("settings.html", user=current_user)
+
+        current_user.scrape_time = parsed_time
+        current_user.history_days = parsed_days
+        db.session.commit()
+        flash("Settings saved.", "success")
+
+    return render_template("settings.html", user=current_user)
+
+
+# ---------------------------------------------------------------------------
 # HTML routes
 # ---------------------------------------------------------------------------
 @app.route("/")
+@login_required
 def index():
-    products = _latest_for_each_product(days=30)
+    days = current_user.history_days
+    products = _latest_for_each_product(current_user.id, days=days)
     for p in products:
-        p["spark"] = _history_series(p["unique_key"], days=7)
+        p["spark"] = _history_series(current_user.id, p["unique_key"], days=7)
     today = _tw_now().strftime("%Y-%m-%d")
-    has_today = _has_today_data()
+    has_today = _has_today_data(current_user.id)
     return render_template("index.html",
                            products=products,
                            today=today,
-                           has_today=has_today)
+                           has_today=has_today,
+                           user=current_user)
 
 
 @app.route("/full-list")
+@login_required
 def full_list():
-    """Every single record ever saved in the database."""
+    """Every single record ever saved in the database for this user."""
     rows = (
-        MomoPrice.query
+        _user_prices(current_user.id)
         .order_by(MomoPrice.timestamp.desc(), MomoPrice.product_name.asc())
         .all()
     )
@@ -165,13 +314,14 @@ def full_list():
 
 
 @app.route("/product/<unique_key>")
+@login_required
 def product_detail(unique_key: str):
-    days = int(request.args.get("days", 30))
-    history = _history_series(unique_key, days=days)
+    days = int(request.args.get("days", current_user.history_days))
+    history = _history_series(current_user.id, unique_key, days=days)
     if not history:
         return f"No history for unique_key={unique_key}", 404
     latest = (
-        MomoPrice.query
+        _user_prices(current_user.id)
         .filter(MomoPrice.unique_key == unique_key)
         .order_by(MomoPrice.timestamp.desc())
         .first()
@@ -188,14 +338,16 @@ def product_detail(unique_key: str):
 # JSON API
 # ---------------------------------------------------------------------------
 @app.get("/api/products")
+@login_required
 def api_products():
-    return jsonify(_latest_for_each_product(days=30))
+    return jsonify(_latest_for_each_product(current_user.id, days=30))
 
 
 @app.get("/api/history/<unique_key>")
+@login_required
 def api_history(unique_key: str):
     days = int(request.args.get("days", 30))
-    return jsonify(_history_series(unique_key, days=days))
+    return jsonify(_history_series(current_user.id, unique_key, days=days))
 
 
 if __name__ == "__main__":

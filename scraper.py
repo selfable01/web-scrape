@@ -9,9 +9,11 @@ database via the POSTGRES_URL environment variable.
 
 Usage (local):
     export POSTGRES_URL="postgres://..."
-    python scraper.py
-    python scraper.py --force         # re-scrape even if today exists
-    python scraper.py --headed        # show the browser (debugging)
+    python scraper.py                    # legacy: scrape for all users due now
+    python scraper.py --force            # re-scrape even if today exists
+    python scraper.py --headed           # show the browser (debugging)
+    python scraper.py --check-schedule   # hourly mode: find users whose scrape_time
+                                         #   has arrived and scrape for each
 """
 
 from __future__ import annotations
@@ -48,6 +50,9 @@ USER_AGENTS = [
 ]
 
 MAX_PAGES_HARD_LIMIT = 50
+MAX_RETRIES = 3          # resilience: retry failed pages up to 3 times
+RETRY_DELAY_S = 10       # seconds between retries
+PAGE_DELAY_S = 2         # seconds between pages
 
 # Timezone for Taiwan
 TW_TZ = timezone(timedelta(hours=8))
@@ -72,13 +77,28 @@ def get_conn():
 
 
 def init_db():
-    """Create the momo_prices table if it doesn't exist."""
+    """Create the users and momo_prices tables if they don't exist."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # Users table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id              SERIAL PRIMARY KEY,
+                    username        TEXT        NOT NULL UNIQUE,
+                    email           TEXT        NOT NULL UNIQUE,
+                    password_hash   TEXT        NOT NULL,
+                    scrape_time     TIME        NOT NULL DEFAULT '11:00',
+                    history_days    INTEGER     NOT NULL DEFAULT 7,
+                    last_scrape_at  TIMESTAMPTZ,
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+            """)
+            # Prices table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS momo_prices (
                     id              SERIAL PRIMARY KEY,
+                    user_id         INTEGER     REFERENCES users(id) ON DELETE CASCADE,
                     product_name    TEXT        NOT NULL,
                     original_price  INTEGER,
                     discount_price  INTEGER     NOT NULL,
@@ -86,10 +106,9 @@ def init_db():
                     unique_key      TEXT        NOT NULL
                 );
             """)
-            # Unique index: one record per product per timestamp
             cur.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uix_momo_prices_key_day
-                    ON momo_prices (unique_key, timestamp);
+                CREATE UNIQUE INDEX IF NOT EXISTS uix_momo_prices_user_key_day
+                    ON momo_prices (user_id, unique_key, (timestamp::date));
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_momo_prices_key
@@ -98,6 +117,10 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_momo_prices_ts
                     ON momo_prices (timestamp);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_momo_prices_user
+                    ON momo_prices (user_id);
             """)
         conn.commit()
     finally:
@@ -110,23 +133,66 @@ def make_unique_key(product_name: str, original_price: int | None) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
-def already_ran_today() -> bool:
-    """Return True if at least one row exists for today (Asia/Taipei)."""
+def already_ran_today_for_user(user_id: int) -> bool:
+    """Return True if at least one row exists for today (Asia/Taipei) for this user."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT 1 FROM momo_prices
-                 WHERE (timestamp AT TIME ZONE 'Asia/Taipei')::date = (NOW() AT TIME ZONE 'Asia/Taipei')::date
+                 WHERE user_id = %s
+                   AND (timestamp AT TIME ZONE 'Asia/Taipei')::date
+                       = (NOW() AT TIME ZONE 'Asia/Taipei')::date
                  LIMIT 1
-            """)
+            """, (user_id,))
             return cur.fetchone() is not None
     finally:
         conn.close()
 
 
-def insert_prices(records: list[dict]) -> int:
-    """Insert today's scraped records. Returns number of rows inserted."""
+def get_users_due_now() -> list[dict]:
+    """
+    Find users whose scrape_time has arrived this hour but haven't been
+    scraped today yet.
+
+    Logic: current Taipei hour >= user's scrape_time hour, AND
+           (last_scrape_at is NULL OR last_scrape_at's Taipei date < today).
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, username, scrape_time, history_days
+                  FROM users
+                 WHERE EXTRACT(HOUR FROM (NOW() AT TIME ZONE 'Asia/Taipei')::time)
+                       >= EXTRACT(HOUR FROM scrape_time)
+                   AND (
+                       last_scrape_at IS NULL
+                       OR (last_scrape_at AT TIME ZONE 'Asia/Taipei')::date
+                          < (NOW() AT TIME ZONE 'Asia/Taipei')::date
+                   )
+            """)
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def update_last_scrape(user_id: int):
+    """Stamp user's last_scrape_at to now."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET last_scrape_at = NOW() WHERE id = %s",
+                (user_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_prices(records: list[dict], user_id: int) -> int:
+    """Insert today's scraped records for a specific user. Returns rows inserted."""
     now = datetime.now(TW_TZ)
     conn = get_conn()
     inserted = 0
@@ -136,10 +202,12 @@ def insert_prices(records: list[dict]) -> int:
                 try:
                     cur.execute("""
                         INSERT INTO momo_prices
-                            (product_name, original_price, discount_price, timestamp, unique_key)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (unique_key, timestamp) DO NOTHING
+                            (user_id, product_name, original_price, discount_price,
+                             timestamp, unique_key)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id, unique_key, (timestamp::date)) DO NOTHING
                     """, (
+                        user_id,
                         r["product_name"],
                         r["original_price"],
                         r["discount_price"],
@@ -307,6 +375,9 @@ async def fetch_html(browser: Browser, url: str, ua: str) -> str:
         await page.wait_for_timeout(3_000)
 
         return await page.content()
+    except Exception as e:
+        print(f"[fetch] Error loading {url}: {e}")
+        return ""
     finally:
         await ctx.close()
 
@@ -315,7 +386,6 @@ async def scrape(headed: bool = False) -> tuple[list[dict], int]:
     """Walk every page of the search result and return all product records."""
     all_records: dict[str, dict] = {}  # dedupe by unique_key across pages
     total_scraped = 0
-    max_retries = 2
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -325,21 +395,37 @@ async def scrape(headed: bool = False) -> tuple[list[dict], int]:
         try:
             page_num = 1
             max_page = 1
+            consecutive_empty = 0  # resilience: track consecutive empty pages
             while page_num <= max_page and page_num <= MAX_PAGES_HARD_LIMIT:
                 ua = USER_AGENTS[(page_num - 1) % len(USER_AGENTS)]
                 url = build_search_url(page_num)
                 print(f"[scrape] page {page_num} → {url}")
 
                 records = []
-                for attempt in range(max_retries + 1):
+                for attempt in range(MAX_RETRIES + 1):
                     html = await fetch_html(browser, url, ua)
+                    if not html:
+                        if attempt < MAX_RETRIES:
+                            print(f"[scrape]   empty response, retrying in {RETRY_DELAY_S}s "
+                                  f"(attempt {attempt + 1}/{MAX_RETRIES})...")
+                            await asyncio.sleep(RETRY_DELAY_S)
+                            continue
+                        break
                     records, max_page = parse_page(html)
                     if records:
                         break
-                    if attempt < max_retries:
-                        print(f"[scrape]   got 0 products, retrying in 10s "
-                              f"(attempt {attempt + 1}/{max_retries})...")
-                        await asyncio.sleep(10)
+                    if attempt < MAX_RETRIES:
+                        print(f"[scrape]   got 0 products, retrying in {RETRY_DELAY_S}s "
+                              f"(attempt {attempt + 1}/{MAX_RETRIES})...")
+                        await asyncio.sleep(RETRY_DELAY_S)
+
+                if not records:
+                    consecutive_empty += 1
+                    if consecutive_empty >= 3:
+                        print("[scrape]   3 consecutive empty pages — stopping early.")
+                        break
+                else:
+                    consecutive_empty = 0
 
                 total_scraped += len(records)
                 print(f"[scrape]   parsed {len(records)} products "
@@ -347,10 +433,41 @@ async def scrape(headed: bool = False) -> tuple[list[dict], int]:
                 for r in records:
                     all_records.setdefault(r["unique_key"], r)
                 page_num += 1
-                await asyncio.sleep(2)
+                await asyncio.sleep(PAGE_DELAY_S)
         finally:
             await browser.close()
     return list(all_records.values()), total_scraped
+
+
+# ---------------------------------------------------------------------------
+# Per-user scheduled execution
+# ---------------------------------------------------------------------------
+def run_for_user(user: dict, unique_records: list[dict], force: bool = False):
+    """Insert scraped products for one user."""
+    user_id = user["id"]
+    username = user["username"]
+
+    if not force and already_ran_today_for_user(user_id):
+        print(f"[scheduler] user '{username}' (id={user_id}) already scraped today — skipping.")
+        return
+
+    inserted = insert_prices(unique_records, user_id)
+    update_last_scrape(user_id)
+    print(f"[scheduler] user '{username}': {inserted} new rows written.")
+
+
+def check_schedule(unique_records: list[dict]):
+    """Find all users whose scrape time has arrived and insert data for them."""
+    users = get_users_due_now()
+    if not users:
+        print("[scheduler] no users due for scraping right now.")
+        return
+
+    print(f"[scheduler] {len(users)} user(s) due: "
+          f"{', '.join(u['username'] for u in users)}")
+
+    for user in users:
+        run_for_user(user, unique_records)
 
 
 # ---------------------------------------------------------------------------
@@ -362,25 +479,91 @@ def main() -> int:
                     help="run even if today's scrape is already in the DB")
     ap.add_argument("--headed", action="store_true",
                     help="show the browser window (debugging)")
+    ap.add_argument("--check-schedule", action="store_true",
+                    help="hourly mode: scrape once, then distribute to all due users")
     args = ap.parse_args()
 
     init_db()
 
-    if already_ran_today() and not args.force:
-        print("[scraper] today already scraped — skipping. Use --force to override.")
+    # ── Scheduled (hourly) mode ──────────────────────────────────────────
+    if args.check_schedule:
+        users_due = get_users_due_now()
+        if not users_due:
+            print("[scheduler] no users due — exiting without scraping.")
+            return 0
+
+        print(f"[scheduler] {len(users_due)} user(s) due — starting scrape...")
+        unique_records, total_scraped = asyncio.run(scrape(headed=args.headed))
+        if not unique_records:
+            print("[scheduler] no products parsed — aborting.")
+            return 1
+
+        print(f"Total Scraped: {total_scraped} | "
+              f"Unique Matches: {len(unique_records)} | Target: 79")
+
+        for user in users_due:
+            run_for_user(user, unique_records, force=True)
         return 0
+
+    # ── Legacy / manual mode (no --check-schedule) ───────────────────────
+    # For backward compatibility: inserts with user_id=NULL
+    if not args.force:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM momo_prices
+                     WHERE user_id IS NULL
+                       AND (timestamp AT TIME ZONE 'Asia/Taipei')::date
+                           = (NOW() AT TIME ZONE 'Asia/Taipei')::date
+                     LIMIT 1
+                """)
+                if cur.fetchone() is not None:
+                    print("[scraper] today already scraped — skipping. "
+                          "Use --force to override.")
+                    return 0
+        finally:
+            conn.close()
 
     unique_records, total_scraped = asyncio.run(scrape(headed=args.headed))
     if not unique_records:
         print("[scraper] no products parsed — aborting without DB write.")
         return 1
 
-    # Verification line
     print(f"Total Scraped: {total_scraped} | "
-          f"Unique Matches: {len(unique_records)} | "
-          f"Target: 79")
+          f"Unique Matches: {len(unique_records)} | Target: 79")
 
-    inserted = insert_prices(unique_records)
+    # Legacy insert (user_id=NULL for unowned data)
+    now = datetime.now(TW_TZ)
+    conn = get_conn()
+    inserted = 0
+    try:
+        with conn.cursor() as cur:
+            for r in unique_records:
+                try:
+                    cur.execute("""
+                        INSERT INTO momo_prices
+                            (product_name, original_price, discount_price,
+                             timestamp, unique_key)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT DO NOTHING
+                    """, (
+                        r["product_name"],
+                        r["original_price"],
+                        r["discount_price"],
+                        now,
+                        r["unique_key"],
+                    ))
+                    if cur.rowcount > 0:
+                        inserted += 1
+                except psycopg2.Error as e:
+                    print(f"[db] Insert error for {r['product_name'][:30]}: {e}")
+                    conn.rollback()
+                    continue
+        conn.commit()
+    finally:
+        conn.close()
+
     print(f"[scraper] {len(unique_records)} unique products, "
           f"{inserted} new rows written.")
     return 0
