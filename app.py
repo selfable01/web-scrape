@@ -21,6 +21,9 @@ POST /settings                  Update scrape settings
 from __future__ import annotations
 
 import os
+import urllib.request
+import urllib.error
+import json as _json
 from datetime import datetime, timedelta, timezone, time as dt_time
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for, flash
@@ -114,6 +117,7 @@ def _next_scrape_display(user) -> str:
     now = _tw_now()
     today = now.date()
     scrape_hour = user.scrape_time.hour
+    time_str = user.scrape_time.strftime("%H:%M")
 
     # Has the scraper already run today for this user?
     already_today = (
@@ -122,14 +126,12 @@ def _next_scrape_display(user) -> str:
     )
 
     if already_today:
-        # Next scrape is tomorrow at user's scrape_time
-        next_date = today + timedelta(days=1)
-        return f"明��� {user.scrape_time.strftime('%H:%M')}（台北時間）"
+        tomorrow = today + timedelta(days=1)
+        return "".join(["\u660e\u5929 ", time_str, "\uff08\u53f0\u5317\u6642\u9593\uff09"])
     elif now.hour >= scrape_hour:
-        # Due now — will run at next hourly check
-        return "即將執行（下一個整點）"
+        return "\u5373\u5c07\u57f7\u884c\uff08\u4e0b\u4e00\u500b\u6574\u9ede\uff09"
     else:
-        return f"今天 {user.scrape_time.strftime('%H:%M')}（台北時間）"
+        return "".join(["\u4eca\u5929 ", time_str, "\uff08\u53f0\u5317\u6642\u9593\uff09"])
 
 
 def _latest_for_each_product(user_id: int, days: int = 30) -> list[dict]:
@@ -302,6 +304,114 @@ def settings():
 
     return render_template("settings.html", user=current_user,
                            next_scrape_display=_next_scrape_display(current_user))
+
+
+# ---------------------------------------------------------------------------
+# Manual scrape trigger (via GitHub Actions API)
+# ---------------------------------------------------------------------------
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "selfable01/web-scrape")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
+
+def _trigger_github_workflow() -> tuple[bool, str]:
+    """Trigger the scraper workflow via GitHub Actions API. Returns (ok, message)."""
+    if not GITHUB_TOKEN:
+        return False, "GITHUB_TOKEN 未設定，無法觸發爬蟲。"
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/daily_scrape.yml/dispatches"
+    data = _json.dumps({"ref": "main"}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Authorization", f"Bearer {GITHUB_TOKEN}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 204:
+                return True, "爬蟲已觸發，約需 3-5 分鐘完成。"
+            return True, f"已送出（狀態碼 {resp.status}）。"
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return False, f"觸發失敗（{e.code}）：{body[:200]}"
+    except urllib.error.URLError as e:
+        return False, f"網路錯誤：{e.reason}"
+
+
+def _get_latest_workflow_run() -> dict | None:
+    """Get the latest workflow run status from GitHub."""
+    if not GITHUB_TOKEN:
+        return None
+
+    url = (f"https://api.github.com/repos/{GITHUB_REPO}"
+           f"/actions/workflows/daily_scrape.yml/runs?per_page=1")
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {GITHUB_TOKEN}")
+    req.add_header("Accept", "application/vnd.github+json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+            runs = data.get("workflow_runs", [])
+            if runs:
+                run = runs[0]
+                return {
+                    "status": run["status"],           # queued, in_progress, completed
+                    "conclusion": run.get("conclusion"),  # success, failure, null
+                    "created_at": run["created_at"],
+                    "html_url": run["html_url"],
+                }
+    except Exception:
+        pass
+    return None
+
+
+@app.route("/scrape-now", methods=["POST"])
+@login_required
+def scrape_now():
+    """Trigger the GitHub Action and reset last_scrape_at so the user is 'due'."""
+    # Reset so the scheduler picks this user up
+    current_user.last_scrape_at = None
+    db.session.commit()
+
+    ok, msg = _trigger_github_workflow()
+    if ok:
+        flash(msg, "success")
+    else:
+        flash(msg, "error")
+
+    return redirect(url_for("settings"))
+
+
+@app.get("/api/scrape-status")
+@login_required
+def api_scrape_status():
+    """Return the latest GitHub Action run status (for polling from the UI)."""
+    run = _get_latest_workflow_run()
+    if not run:
+        return jsonify({"status": "unknown", "message": "無法取得狀態"})
+
+    status_map = {
+        "queued": "排隊中",
+        "in_progress": "執行中",
+        "completed": "已完成",
+    }
+    conclusion_map = {
+        "success": "成功",
+        "failure": "失敗",
+        "cancelled": "已取消",
+    }
+
+    display = status_map.get(run["status"], run["status"])
+    if run["status"] == "completed" and run["conclusion"]:
+        display = conclusion_map.get(run["conclusion"], run["conclusion"])
+
+    return jsonify({
+        "status": run["status"],
+        "conclusion": run["conclusion"],
+        "display": display,
+        "created_at": run["created_at"],
+        "url": run["html_url"],
+    })
 
 
 # ---------------------------------------------------------------------------

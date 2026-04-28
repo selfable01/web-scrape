@@ -22,7 +22,7 @@
   h2 { font-size:18px; margin:0 0 8px; font-weight:600 }
   p.sub { color:var(--muted); margin:0 0 28px; font-size:13px }
   .card { background:var(--panel); border:1px solid var(--line);
-    border-radius:12px; padding:28px }
+    border-radius:12px; padding:28px; margin-bottom:20px }
   label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px }
   input[type=time], input[type=number] {
     width:100%; padding:10px 12px; border:1px solid var(--line);
@@ -31,18 +31,33 @@
   }
   input:focus { border-color:var(--accent) }
   .hint { color:var(--muted); font-size:11px; margin-bottom:20px }
-  button {
-    width:100%; padding:10px; background:var(--accent); color:#fff;
+  button, .btn {
+    display:block; width:100%; padding:10px; background:var(--accent); color:#fff;
     border:none; border-radius:8px; font-size:14px; font-weight:600;
-    cursor:pointer; transition: opacity .15s;
+    cursor:pointer; transition: opacity .15s; text-align:center; text-decoration:none;
   }
-  button:hover { opacity:.85 }
+  button:hover, .btn:hover { opacity:.85 }
+  .btn-scrape {
+    background:#22c55e; margin-top:0;
+  }
+  .btn-scrape:hover { background:#16a34a }
+  .btn-scrape:disabled { background:#374151; color:var(--muted); cursor:not-allowed }
   .flash { padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:16px }
   .flash.error { background:rgba(255,90,95,.12); color:var(--up) }
   .flash.success { background:rgba(34,197,94,.12); color:var(--down) }
   .info { background:var(--panel); border:1px solid var(--line);
     border-radius:12px; padding:20px; margin-top:20px; font-size:13px; color:var(--muted) }
   .info strong { color:var(--text) }
+  .status-bar { padding:12px 16px; border-radius:8px; font-size:13px;
+    margin-top:12px; display:none }
+  .status-bar.show { display:block }
+  .status-bar.running { background:rgba(59,130,246,.12); color:var(--accent) }
+  .status-bar.success { background:rgba(34,197,94,.12); color:var(--down) }
+  .status-bar.failed  { background:rgba(255,90,95,.12); color:var(--up) }
+  .spinner { display:inline-block; width:14px; height:14px; border:2px solid var(--accent);
+    border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite;
+    vertical-align:middle; margin-right:6px }
+  @keyframes spin { to { transform:rotate(360deg) } }
 </style>
 </head>
 <body>
@@ -56,18 +71,19 @@
 <div class="wrap">
   <h2>爬蟲設定</h2>
   <p class="sub">設定您的每日爬蟲時間與歷史資料範圍。</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="flash {{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+
   <div class="card">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for cat, msg in messages %}
-        <div class="flash {{ cat }}">{{ msg }}</div>
-      {% endfor %}
-    {% endwith %}
     <form method="post">
       <label for="scrape_time">每日爬蟲時間（台北時間）</label>
       <input type="time" id="scrape_time" name="scrape_time"
              value="{{ user.scrape_time.strftime('%H:%M') }}" required>
       <div class="hint">爬蟲每小時檢查一次。您的爬蟲會在此時間之後的下一個整點執行。
-        例如：設定 14:30 表示爬蟲會在 15:00 執行。
         若修改時間，今天尚未爬取則按新時間執行；若已爬取則會依新時間再次爬取。</div>
 
       <label for="history_days">歷史資料範圍（天）</label>
@@ -77,6 +93,15 @@
 
       <button type="submit">儲存設定</button>
     </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-bottom:12px">手動爬取</h2>
+    <p class="sub" style="margin-bottom:16px">不想等排程？立即觸發爬蟲，約需 3-5 分鐘完成。</p>
+    <form method="post" action="/scrape-now" id="scrape-form">
+      <button type="submit" class="btn-scrape" id="scrape-btn">立即爬取</button>
+    </form>
+    <div class="status-bar" id="scrape-status"></div>
   </div>
 
   <div class="info">
@@ -90,5 +115,53 @@
     {% endif %}
   </div>
 </div>
+
+<script>
+const btn = document.getElementById('scrape-btn');
+const bar = document.getElementById('scrape-status');
+let polling = false;
+
+document.getElementById('scrape-form').addEventListener('submit', function() {
+  btn.disabled = true;
+  btn.textContent = '觸發中...';
+  // Start polling after a short delay (give the API time to create the run)
+  setTimeout(() => { polling = true; pollStatus(); }, 5000);
+});
+
+function pollStatus() {
+  if (!polling) return;
+  fetch('/api/scrape-status')
+    .then(r => r.json())
+    .then(d => {
+      bar.classList.add('show');
+      bar.className = 'status-bar show';
+
+      if (d.status === 'in_progress' || d.status === 'queued') {
+        bar.classList.add('running');
+        bar.innerHTML = '<span class="spinner"></span>' + d.display +
+          '... <a href="' + d.url + '" target="_blank" style="color:var(--accent)">查看記錄</a>';
+        setTimeout(pollStatus, 10000);
+      } else if (d.status === 'completed') {
+        if (d.conclusion === 'success') {
+          bar.classList.add('success');
+          bar.innerHTML = '爬蟲完成！<a href="/" style="color:var(--down);font-weight:600;margin-left:8px">前往首頁查看資料</a>';
+        } else {
+          bar.classList.add('failed');
+          bar.innerHTML = '爬蟲' + d.display +
+            ' <a href="' + d.url + '" target="_blank" style="color:var(--up)">查看錯誤記錄</a>';
+        }
+        btn.disabled = false;
+        btn.textContent = '立即爬取';
+        polling = false;
+      } else {
+        bar.innerHTML = d.message || d.display;
+        setTimeout(pollStatus, 10000);
+      }
+    })
+    .catch(() => {
+      setTimeout(pollStatus, 10000);
+    });
+}
+</script>
 </body>
 </html>
